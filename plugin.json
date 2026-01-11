@@ -1,0 +1,22 @@
+{
+    "name": "Spotify Converter",
+    "version": "1.0.0",
+    "author": "Audion Team",
+    "description": "Convert Spotify playlists to Audion playlists using Tidal",
+    "type": "js",
+    "entry": "index.js",
+    "permissions": [
+        "network:fetch",
+        "ui:inject",
+        "library:write",
+        "library:read"
+    ],
+    "category": "utility",
+    "tags": [
+        "converter",
+        "spotify",
+        "playlist",
+        "tidal"
+    ],
+    "license": "MIT"
+}
