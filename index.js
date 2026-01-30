@@ -1,6 +1,6 @@
 (function () {
     // ═══════════════════════════════════════════════════════════════════════════
-    // SPOTIFY CONVERTER PLUGIN
+    // SPOTIFY CONVERTER PLUGIN - API VERSION
     // ═══════════════════════════════════════════════════════════════════════════
 
     const SpotifyConverter = {
@@ -9,18 +9,11 @@
         isOpen: false,
         isConverting: false,
         stopConversion: false,
+        spotifyToken: null,
 
         // API endpoints
         TIDAL_API_BASE: 'https://katze.qqdl.site',
-        // CORS proxy might be needed for Spotify if direct fetch fails due to CORS,
-        // but often we can fetch public pages. If not, we might need a proxy.
-        // For now we'll try direct fetch, and if it fails (likely due to CORS), we'll note it.
-        // Actually, 'network:fetch' in Tauri usually bypasses CORS if done via backend,
-        // but here plugins use browser fetch.
-        // However, we are in a Tauri app properly configured, we might have privileges.
-        // If strict CORS applies, we might need a workaround or the user to use a backend proxy.
-        // Let's assume we can fetch or use a CORS proxy.
-        CORS_PROXY: 'https://api.allorigins.win/raw?url=',
+        SPOTIFY_API_BASE: 'https://api.spotify.com/v1',
 
         init(api) {
             console.log('[SpotifyConverter] Initializing...');
@@ -34,7 +27,7 @@
         },
 
         // ═══════════════════════════════════════════════════════════════════════
-        // UI
+        // UI (Same as before)
         // ═══════════════════════════════════════════════════════════════════════
 
         injectStyles() {
@@ -243,7 +236,179 @@
         },
 
         // ═══════════════════════════════════════════════════════════════════════
-        // LOGIC
+        // SPOTIFY API TOKEN EXTRACTION
+        // ═══════════════════════════════════════════════════════════════════════
+
+        async extractSpotifyToken() {
+            // Method 1: Try to get token from open.spotify.com session
+            try {
+                this.log('Attempting to extract Spotify token...', 'info');
+
+                // Open Spotify in hidden iframe to get token from their app
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                iframe.src = 'https://open.spotify.com';
+                document.body.appendChild(iframe);
+
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for load
+
+                // Try to access localStorage/sessionStorage from iframe
+                try {
+                    const iframeWindow = iframe.contentWindow;
+                    
+                    // Look for token in localStorage
+                    for (let i = 0; i < iframeWindow.localStorage.length; i++) {
+                        const key = iframeWindow.localStorage.key(i);
+                        const value = iframeWindow.localStorage.getItem(key);
+                        
+                        // Spotify stores tokens in various keys
+                        if (key && value && (key.includes('token') || key.includes('auth'))) {
+                            try {
+                                const parsed = JSON.parse(value);
+                                if (parsed.accessToken) {
+                                    document.body.removeChild(iframe);
+                                    this.log('Token extracted successfully!', 'success');
+                                    return parsed.accessToken;
+                                }
+                            } catch (e) {
+                                // Not JSON, might be direct token
+                                if (value.length > 100 && value.includes('.')) {
+                                    document.body.removeChild(iframe);
+                                    this.log('Token extracted successfully!', 'success');
+                                    return value;
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Cross-origin access blocked:', e);
+                }
+
+                document.body.removeChild(iframe);
+            } catch (e) {
+                console.error('Token extraction failed:', e);
+            }
+
+            // Method 2: Fetch playlist page and extract from HTML/scripts
+            return null;
+        },
+
+        async extractTokenFromPage(playlistUrl) {
+            try {
+                this.log('Fetching playlist page for token...', 'info');
+                
+                const proxies = [
+                    (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+                    (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+                ];
+
+                let html = null;
+                
+                for (const proxyFn of proxies) {
+                    const proxyUrl = proxyFn(playlistUrl);
+                    try {
+                        const res = await fetch(proxyUrl);
+                        if (res.ok) {
+                            html = await res.text();
+                            break;
+                        }
+                    } catch (e) {
+                        console.warn('Proxy failed:', e);
+                    }
+                }
+
+                if (!html) return null;
+
+                // Look for access token in scripts
+                // Spotify embeds token in: window.Spotify = {...} or similar
+                const tokenMatch = html.match(/"accessToken":"([^"]+)"/);
+                if (tokenMatch && tokenMatch[1]) {
+                    this.log('Token found in page source!', 'success');
+                    return tokenMatch[1];
+                }
+
+                // Alternative pattern
+                const altMatch = html.match(/accessToken["\s:]+([A-Za-z0-9_-]+)/);
+                if (altMatch && altMatch[1]) {
+                    this.log('Token found (alt pattern)!', 'success');
+                    return altMatch[1];
+                }
+
+            } catch (e) {
+                console.error('Failed to extract token from page:', e);
+            }
+
+            return null;
+        },
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // SPOTIFY API METHODS
+        // ═══════════════════════════════════════════════════════════════════════
+
+        async fetchPlaylistFromAPI(playlistId, token) {
+            const headers = {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            };
+
+            // Get playlist details
+            const playlistUrl = `${this.SPOTIFY_API_BASE}/playlists/${playlistId}`;
+            const response = await fetch(playlistUrl, { headers });
+            
+            if (!response.ok) {
+                throw new Error(`Spotify API error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            const tracks = [];
+
+            // Get all tracks (handle pagination)
+            let nextUrl = data.tracks.next;
+            
+            // Add first batch
+            data.tracks.items.forEach(item => {
+                if (item.track && !item.track.is_local) {
+                    tracks.push({
+                        title: item.track.name,
+                        artist: item.track.artists.map(a => a.name).join(', '),
+                        album: item.track.album.name,
+                        isrc: item.track.external_ids?.isrc
+                    });
+                }
+            });
+
+            // Fetch remaining pages
+            while (nextUrl && !this.stopConversion) {
+                this.log(`Fetching more tracks (${tracks.length} so far)...`, 'info');
+                const nextResponse = await fetch(nextUrl, { headers });
+                
+                if (!nextResponse.ok) break;
+                
+                const nextData = await nextResponse.json();
+                nextData.items.forEach(item => {
+                    if (item.track && !item.track.is_local) {
+                        tracks.push({
+                            title: item.track.name,
+                            artist: item.track.artists.map(a => a.name).join(', '),
+                            album: item.track.album.name,
+                            isrc: item.track.external_ids?.isrc
+                        });
+                    }
+                });
+
+                nextUrl = nextData.next;
+                await new Promise(r => setTimeout(r, 100)); // Rate limiting
+            }
+
+            return {
+                title: data.name,
+                description: data.description,
+                tracks: tracks
+            };
+        },
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // MAIN LOGIC
         // ═══════════════════════════════════════════════════════════════════════
 
         open() {
@@ -301,6 +466,14 @@
                 return;
             }
 
+            // Extract playlist ID
+            const playlistIdMatch = url.match(/playlist\/([a-zA-Z0-9]+)/);
+            if (!playlistIdMatch) {
+                this.log('Could not extract playlist ID', 'error');
+                return;
+            }
+            const playlistId = playlistIdMatch[1];
+
             this.isConverting = true;
             this.stopConversion = false;
             btn.disabled = true;
@@ -308,27 +481,42 @@
             urlInput.disabled = true;
             this.updateProgress(0);
 
-            // Clear log except header
             document.getElementById('sc-log').innerHTML = '';
             this.log('Starting conversion...');
 
             try {
-                // 0. Pre-fetch library map
-                this.log('Checking existing library...');
+                // Get Spotify token
+                if (!this.spotifyToken) {
+                    this.spotifyToken = await this.extractTokenFromPage(url);
+                    
+                    if (!this.spotifyToken) {
+                        this.log('Could not extract Spotify token. Trying alternative method...', 'warn');
+                        this.spotifyToken = await this.extractSpotifyToken();
+                    }
+                }
+
+                if (!this.spotifyToken) {
+                    this.log('Failed to get Spotify access token.', 'error');
+                    this.log('Please ensure you are logged into Spotify in this browser.', 'warn');
+                    return;
+                }
+
+                // Fetch playlist data using API
+                this.log('Fetching playlist via Spotify API...', 'info');
+                const playlistData = await this.fetchPlaylistFromAPI(playlistId, this.spotifyToken);
+                this.log(`Found: "${playlistData.title}" with ${playlistData.tracks.length} tracks`, 'success');
+
+                // Pre-fetch library map
+                this.log('Checking existing library...', 'info');
                 const existingTracks = await this.getTidalLibraryMap();
-                this.log(`Loaded map of ${existingTracks.size} existing Tidal tracks.`, 'info');
+                this.log(`Loaded ${existingTracks.size} existing Tidal tracks`, 'info');
 
-                // 1. Fetch playlist page
-                this.log('Fetching playlist data...');
-                const playlistData = await this.fetchPlaylistData(url);
-                this.log(`Found playlist: "${playlistData.title}" with ${playlistData.tracks.length} tracks`, 'success');
+                // Create Audion playlist
+                this.log('Creating local playlist...', 'info');
+                const audionPlaylistId = await this.api.library.createPlaylist(playlistData.title);
+                this.log(`Created playlist ID: ${audionPlaylistId}`, 'success');
 
-                // 2. Create Audion playlist
-                this.log('Creating local playlist...');
-                const playlistId = await this.api.library.createPlaylist(playlistData.title);
-                this.log(`Created playlist ID: ${playlistId}`, 'info');
-
-                // 3. Process tracks
+                // Process tracks
                 let processed = 0;
                 let successes = 0;
 
@@ -343,39 +531,37 @@
 
                     try {
                         const query = `${track.title} ${track.artist}`;
-                        this.log(`Searching: ${track.title} + ${track.artist}`, 'info');
+                        this.log(`[${processed}/${playlistData.tracks.length}] Searching: ${track.title}`, 'info');
 
                         const tidalTrack = await this.searchTidal(query);
 
                         if (tidalTrack) {
                             const tidalId = String(tidalTrack.id);
-                            const foundTitle = tidalTrack.title;
-                            const foundArtist = tidalTrack.artist?.name || tidalTrack.artists?.[0]?.name || 'Unknown';
                             let trackId;
 
                             if (existingTracks.has(tidalId)) {
                                 trackId = existingTracks.get(tidalId);
-                                this.log(`[${processed}/${playlistData.tracks.length}] Reusing: ${foundTitle} - ${foundArtist}`, 'info');
+                                this.log(`[${processed}/${playlistData.tracks.length}] ✓ Reusing existing`, 'info');
                             } else {
                                 trackId = await this.addTrackToLibrary(tidalTrack);
                                 existingTracks.set(tidalId, trackId);
-                                this.log(`[${processed}/${playlistData.tracks.length}] Found: ${foundTitle} - ${foundArtist}`, 'success');
+                                this.log(`[${processed}/${playlistData.tracks.length}] ✓ Added to library`, 'success');
                             }
 
-                            await this.api.library.addTrackToPlaylist(playlistId, trackId);
+                            await this.api.library.addTrackToPlaylist(audionPlaylistId, trackId);
                             successes++;
                         } else {
-                            this.log(`[${processed}/${playlistData.tracks.length}] Not found: ${track.title}`, 'warn');
+                            this.log(`[${processed}/${playlistData.tracks.length}] ✗ Not found`, 'warn');
                         }
                     } catch (err) {
                         console.error(err);
-                        this.log(`[${processed}/${playlistData.tracks.length}] Error: ${track.title}`, 'error');
+                        this.log(`[${processed}/${playlistData.tracks.length}] ✗ Error`, 'error');
                     }
 
                     await new Promise(r => setTimeout(r, 200));
                 }
 
-                this.log(`Done! Imported ${successes} of ${playlistData.tracks.length} tracks.`, 'success');
+                this.log(`Done! Imported ${successes}/${playlistData.tracks.length} tracks`, 'success');
 
                 if (this.api.library.refresh) {
                     this.api.library.refresh();
@@ -384,6 +570,12 @@
             } catch (err) {
                 console.error(err);
                 this.log(`Error: ${err.message}`, 'error');
+                
+                // Reset token on auth errors
+                if (err.message.includes('401') || err.message.includes('403')) {
+                    this.spotifyToken = null;
+                    this.log('Token may have expired. Please try again.', 'warn');
+                }
             } finally {
                 this.isConverting = false;
                 btn.disabled = false;
@@ -392,296 +584,22 @@
             }
         },
 
-        async fetchPlaylistData(url) {
-            let html = null;
-
-            // List of proxies to try in order
-            const proxies = [
-                (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-                (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-                (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
-            ];
-
-            // 1. Try Direct Fetch (unlikely to work for Spotify but good practice)
-            try {
-                const res = await fetch(url);
-                if (res.ok) {
-                    html = await res.text();
-                }
-            } catch (e) { /* ignore */ }
-
-            // 2. Try Proxies
-            if (!html) {
-                for (const proxyFn of proxies) {
-                    const proxyUrl = proxyFn(url);
-                    this.log(`Trying proxy: ${new URL(proxyUrl).hostname}...`, 'info');
-                    try {
-                        const res = await fetch(proxyUrl);
-                        if (!res.ok) throw new Error(`Status ${res.status}`);
-                        html = await res.text();
-                        if (html) {
-                            this.log('Proxy fetch successful', 'success');
-                            break;
-                        }
-                    } catch (e) {
-                        console.warn(`Proxy failed: ${proxyUrl}`, e);
-                    }
-                }
-            }
-
-            if (!html) {
-                throw new Error('Failed to fetch playlist data. All proxies failed.');
-            }
-
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-
-            const title = doc.querySelector('meta[property="og:title"]')?.content || 'Spotify Playlist';
-            const tracks = [];
-
-            // Strategy 1: Look for JSON metadata (SpotifyEntity or initial-state)
-            try {
-                // Check for generic initial-state script (Common in React/Next.js apps like Spotify)
-                const stateScript = doc.getElementById('initial-state') || doc.getElementById('session'); // session sometimes has it
-
-                if (stateScript) {
-                    let jsonStr = stateScript.textContent;
-                    // Attempt base64 decode if it looks like base64 (no curly brace at start)
-                    if (jsonStr && !jsonStr.trim().startsWith('{')) {
-                        try {
-                            jsonStr = atob(jsonStr);
-                        } catch (e) { /* ignore, maybe not base64 */ }
-                    }
-
-                    if (jsonStr) {
-                        const data = JSON.parse(jsonStr);
-                        // Traverse potential paths for tracks
-                        // Path 1: entities relative
-                        // Path 2: queries
-
-                        // Helper to finding tracks in big object
-                        const findItems = (obj) => {
-                            if (!obj || typeof obj !== 'object') return;
-                            if (obj.items && Array.isArray(obj.items) && obj.items.length > 0) {
-                                const first = obj.items[0];
-                                if (first.track && first.track.artists) {
-                                    // Found it!
-                                    obj.items.forEach(item => {
-                                        if (item.track) {
-                                            tracks.push({
-                                                title: item.track.name,
-                                                artist: item.track.artists.map(a => a.name).join(', ')
-                                            });
-                                        }
-                                    });
-                                }
-                            }
-                            Object.values(obj).forEach(val => findItems(val));
-                        };
-
-                        findItems(data);
-                    }
-                }
-
-                if (tracks.length === 0) {
-                    // Fallback to searching scripts for "SpotifyEntity"
-                    const scripts = Array.from(doc.scripts);
-                    let resourceScript = scripts.find(s => s.textContent.includes('SpotifyEntity'));
-
-                    if (resourceScript) {
-                        const match = resourceScript.textContent.match(/SpotifyEntity\s*=\s*({.+?});/s);
-                        if (match && match[1]) {
-                            const data = JSON.parse(match[1]);
-                            if (data && data.tracks && data.tracks.items) {
-                                data.tracks.items.forEach(item => {
-                                    const t = item.track;
-                                    if (t) {
-                                        tracks.push({
-                                            title: t.name,
-                                            artist: t.artists.map(a => a.name).join(', ')
-                                        });
-                                    }
-                                });
-                            }
-                        }
-                    }
-                }
-            } catch (e) { console.warn('JSON parse failed', e); }
-
-            // Strategy 1.5: Look for hydration data (modern Spotify)
-            // It looks like <script type="application/json" id="shared-data"> or similar
-            if (tracks.length === 0) {
-                // Try simple regex search on the whole HTML for track/artist patterns if DOM is messy.
-                // "name":"Track Name" ... "artists":[{"name":"Artist"}]
-                // This is risky but powerful for large blobs
-            }
-
-            // Strategy 2: User-provided DOM scraping logic (Adapted for static HTML)
-            if (tracks.length === 0) {
-                this.log('Attempting user-provided scraper logic...', 'info');
-
-                // Get all track rows
-                const trackRows = doc.querySelectorAll('[data-testid="tracklist-row"], [data-testid="playlist-tracklist-row"]');
-                this.log(`Strategy 2: Found ${trackRows.length} track rows`, 'info');
-
-                trackRows.forEach((row, index) => {
-                    try {
-                        // Strategy 1: Look for title and artist in common containers
-                        let songTitle = row.querySelector('[data-testid="internal-track-link"] div')?.textContent ||
-                            row.querySelector('a[href*="/track/"] div')?.textContent;
-
-                        let artist = row.querySelector('a[href*="/artist/"]')?.textContent;
-
-                        // Strategy 2: Alternative selectors
-                        if (!songTitle) {
-                            songTitle = row.querySelector('.t_yrXoUO3qGsJS4Y6iXX')?.textContent ||
-                                row.querySelector('[dir="auto"]')?.textContent;
-                            // Fallback to direct link text if div lookup failed
-                            if (!songTitle) {
-                                songTitle = row.querySelector('a[href*="/track/"]')?.textContent;
-                            }
-                        }
-
-                        if (!artist) {
-                            const artistLinks = row.querySelectorAll('a[href*="/artist/"]');
-                            if (artistLinks.length > 0) {
-                                artist = Array.from(artistLinks).map(a => a.textContent).join(', ');
-                            }
-                        }
-
-                        if (songTitle) {
-                            tracks.push({
-                                title: songTitle.trim(),
-                                artist: artist ? artist.trim() : 'Unknown Artist'
-                            });
-                        }
-                    } catch (err) {
-                        console.warn(`Error parsing row ${index + 1}:`, err);
-                    }
-                });
-            }
-
-            // Strategy 3: Fallback simple link scraper (if the structured rows don't exist in static HTML)
-            if (tracks.length === 0) {
-                this.log('Strategy 2 failed (0 tracks). Falling back to smart link scraping.', 'warn');
-                const trackLinks = Array.from(doc.querySelectorAll('a[href*="/track/"]'));
-                this.log(`Strategy 3: Found ${trackLinks.length} track links`, 'info');
-
-                // DEBUG: Log first track's HTML structure
-                if (trackLinks.length > 0) {
-                    const firstLink = trackLinks[0];
-                    console.log('=== FIRST TRACK LINK DEBUG ===');
-                    console.log('Link text:', firstLink.textContent);
-                    console.log('Link HTML:', firstLink.outerHTML);
-                    console.log('Parent HTML:', firstLink.parentElement?.outerHTML);
-                    // Use closest div or fallback to parent's parent for context
-                    const container = firstLink.closest('div') || firstLink.parentElement?.parentElement;
-                    if (container) {
-                        console.log('Container HTML:', container.outerHTML.substring(0, 500));
-                    }
-                }
-
-                for (const link of trackLinks) {
-                    const trackTitle = link.textContent.trim();
-                    if (!trackTitle) continue;
-
-                    // Deduplicate based on title in this fallback pass
-                    if (tracks.find(t => t.title === trackTitle)) continue;
-
-                    let artistName = '';
-
-                    // Try to find artist in next sibling or parent's sibling (look ahead)
-                    let next = link.nextElementSibling;
-                    // Or check parent's next sibling if link is inside a div
-                    if (!next && link.parentElement.tagName === 'DIV') {
-                        next = link.parentElement.nextElementSibling;
-                    }
-
-                    // Look ahead a few elements for an artist link OR text span
-                    let lookAhead = 5;
-                    while (next && lookAhead > 0) {
-                        // 1. Check for Artist Link
-                        if (next.tagName === 'A' && next.href.includes('/artist/')) {
-                            artistName = next.textContent.trim();
-                            break;
-                        }
-
-                        // 2. Check for nested Artist Link
-                        if (next.querySelector) {
-                            const internalArtist = next.querySelector('a[href*="/artist/"]');
-                            if (internalArtist) {
-                                artistName = internalArtist.textContent.trim();
-                                break;
-                            }
-
-                            // 3. User Snippet Match: Check for Artist in SPAN (like "NIKI" case)
-                            // Structure: Track Link -> Div -> Span(Artist)
-                            // Or Track Link -> Span(Artist)
-                            const possibleArtistSpan = next.querySelector('span[class*="encore-text"], span[class*="text"]');
-                            if (possibleArtistSpan) {
-                                const t = possibleArtistSpan.textContent.trim();
-                                // Avoid confusing with duration (e.g. 3:45) or other metadata
-                                if (t && t.length > 1 && !t.includes(':') && t !== 'E') {
-                                    artistName = t;
-                                    // Don't break immediately, might be a better link further down? 
-                                    // Actually usually this comes right after title.
-                                    break;
-                                }
-                            }
-                        }
-
-                        // 4. Check if NEXT element itself is the span (if layout is flat)
-                        if (next.tagName === 'SPAN' || next.tagName === 'DIV') {
-                            const t = next.textContent.trim();
-                            if (t && !t.includes(':') && t !== 'E' && t.length > 1 && !artistName) {
-                                // Weak guess, but better than empty
-                                // Only accept if we haven't found anything better
-                                // artistName = t; 
-                                // Let's rely on class match or structure above for now to avoid junk
-                            }
-                        }
-
-                        next = next.nextElementSibling;
-                        lookAhead--;
-                    }
-
-                    tracks.push({ title: trackTitle, artist: artistName });
-                }
-            }
-
-            if (tracks.length === 0) {
-                // Strategy 3: Meta description fallback
-                const description = doc.querySelector('meta[name="description"]')?.content;
-                // Format: "Listen on Spotify: Playlist containing Track 1 by Artist 1, Track 2 by Artist 2..."
-                // Only gets first few tracks, but better than crashing.
-                if (description) {
-                    // Try to match "Track by Artist"
-                }
-
-                throw new Error('Could not extract tracks. Spotify might have changed their layout.');
-            }
-
-            return { title, tracks };
-        },
-
         async searchTidal(query) {
             try {
-                // Use the same API as tidal-search plugin
                 const response = await fetch(`${this.TIDAL_API_BASE}/search/?s=${encodeURIComponent(query)}`);
                 if (!response.ok) return null;
                 const data = await response.json();
 
                 if (data.data && data.data.items && data.data.items.length > 0) {
-                    return data.data.items[0]; // Best match
+                    return data.data.items[0];
                 }
             } catch (e) {
-                console.warn('Search failed', e);
+                console.warn('Tidal search failed', e);
             }
             return null;
         },
 
         async addTrackToLibrary(tidalTrack) {
-            // Construct data matching what 'tidal-search' does
             const artistName = tidalTrack.artist?.name || tidalTrack.artists?.[0]?.name || 'Unknown Artist';
             const title = tidalTrack.title + (tidalTrack.version ? ` (${tidalTrack.version})` : '');
             const coverUrl = tidalTrack.album?.cover
@@ -696,15 +614,14 @@
                 cover_url: coverUrl,
                 source_type: 'tidal',
                 external_id: String(tidalTrack.id),
-                format: 'LOSSLESS', // Default, will resolve actual on play
+                format: 'LOSSLESS',
                 bitrate: null
             };
 
-            // Returns track ID
             return await this.api.library.addExternalTrack(trackData);
         }
     };
 
     window.SpotifyConverter = SpotifyConverter;
-    window.AudionPlugin = SpotifyConverter; // Register standard entry point
+    window.AudionPlugin = SpotifyConverter;
 })();
