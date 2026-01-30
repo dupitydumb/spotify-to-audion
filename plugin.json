@@ -9,7 +9,8 @@
         "network:fetch",
         "ui:inject",
         "library:write",
-        "library:read"
+        "library:read",
+        "storage:local"
     ],
     "category": "utility",
     "tags": [
@@ -19,5 +20,4 @@
         "tidal"
     ],
     "license": "MIT"
-
 }
