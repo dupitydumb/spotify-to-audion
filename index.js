@@ -204,6 +204,63 @@
                     width: 0%;
                     transition: width 0.3s;
                 }
+
+                /* ═══ Mobile Responsive ═══ */
+                @media (max-width: 768px) {
+                    #spotify-converter-modal {
+                        width: 100vw;
+                        height: 100vh;
+                        max-width: 100vw;
+                        max-height: 100vh;
+                        top: 0; left: 0;
+                        transform: none;
+                        border-radius: 0;
+                        border: none;
+                        padding: 16px;
+                        gap: 14px;
+                        justify-content: flex-start;
+                    }
+                    #spotify-converter-modal.open {
+                        transform: none;
+                    }
+
+                    .sc-header h2 {
+                        font-size: 18px;
+                    }
+                    .sc-close-btn {
+                        min-width: 44px;
+                        min-height: 44px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        -webkit-tap-highlight-color: transparent;
+                    }
+
+                    .sc-input {
+                        font-size: 16px; /* prevent iOS zoom */
+                        padding: 14px 12px;
+                    }
+
+                    .sc-btn {
+                        min-height: 48px;
+                        font-size: 15px;
+                        -webkit-tap-highlight-color: transparent;
+                    }
+                    .sc-btn.help {
+                        min-height: 44px;
+                        font-size: 13px;
+                    }
+
+                    .sc-log {
+                        height: 120px;
+                        font-size: 11px;
+                    }
+
+                    .sc-help-box {
+                        font-size: 12px;
+                        padding: 12px;
+                    }
+                }
             `;
             document.head.appendChild(style);
         },
