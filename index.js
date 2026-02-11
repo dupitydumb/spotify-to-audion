@@ -14,6 +14,7 @@
         isOpen: false,
         isConverting: false,
         stopConversion: false,
+        importedPlaylistData: null, // Store loaded JSON data here
 
         // API endpoints
         TIDAL_API_BASE: 'https://katze.qqdl.site',
@@ -113,7 +114,17 @@
                     flex-direction: column;
                     gap: 8px;
                 }
+
+                .sc-row {
+                    display: flex;
+                    gap: 10px;
+                    align-items: stretch;
+                }
                 
+                .sc-input-wrapper {
+                    flex-grow: 1;
+                }
+
                 .sc-details {
                     font-size: 12px;
                     color: #888;
@@ -144,36 +155,17 @@
                     font-weight: 600;
                     cursor: pointer;
                     transition: transform 0.1s;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 6px;
                 }
                 .sc-btn:hover:not(:disabled) { transform: scale(1.02); filter: brightness(1.1); }
                 .sc-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-                .sc-btn.secondary { background: var(--bg-highlight, #3e3e3e); }
-                .sc-btn.help { 
-                    background: transparent; 
-                    border: 1px solid var(--border-color, #404040); 
-                    color: var(--text-secondary, #b3b3b3);
-                    padding: 8px 12px;
-                    font-size: 12px;
-                }
-                .sc-btn.help:hover {
-                    border-color: #1DB954;
-                    color: #1DB954;
-                }
-
-                .sc-help-box {
-                    background: var(--bg-surface, #282828);
-                    border: 1px solid var(--border-color, #404040);
-                    border-radius: 8px;
-                    padding: 16px;
-                    margin-bottom: 16px;
-                    font-size: 13px;
-                    color: var(--text-secondary, #b3b3b3);
-                    display: none;
-                }
-                .sc-help-box.visible { display: block; }
-                .sc-help-box a { color: #1DB954; text-decoration: none; }
-                .sc-help-box ul { margin: 8px 0; padding-left: 20px; }
-                .sc-help-box li { margin-bottom: 4px; }
+                .sc-btn.secondary { background: var(--bg-highlight, #3e3e3e); color: #fff; border: 1px solid #555; }
+                
+                /* File Input hidden, triggered by label */
+                #sc-file-input { display: none; }
 
                 .sc-log {
                     background: #000;
@@ -220,46 +212,14 @@
                         gap: 14px;
                         justify-content: flex-start;
                     }
-                    #spotify-converter-modal.open {
-                        transform: none;
-                    }
+                    #spotify-converter-modal.open { transform: none; }
 
-                    .sc-header h2 {
-                        font-size: 18px;
-                    }
-                    .sc-close-btn {
-                        min-width: 44px;
-                        min-height: 44px;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        -webkit-tap-highlight-color: transparent;
-                    }
-
-                    .sc-input {
-                        font-size: 16px; /* prevent iOS zoom */
-                        padding: 14px 12px;
-                    }
-
-                    .sc-btn {
-                        min-height: 48px;
-                        font-size: 15px;
-                        -webkit-tap-highlight-color: transparent;
-                    }
-                    .sc-btn.help {
-                        min-height: 44px;
-                        font-size: 13px;
-                    }
-
-                    .sc-log {
-                        height: 120px;
-                        font-size: 11px;
-                    }
-
-                    .sc-help-box {
-                        font-size: 12px;
-                        padding: 12px;
-                    }
+                    .sc-header h2 { font-size: 18px; }
+                    .sc-close-btn { min-width: 44px; min-height: 44px; }
+                    .sc-row { flex-direction: column; }
+                    .sc-input { font-size: 16px; padding: 14px 12px; }
+                    .sc-btn { min-height: 48px; font-size: 15px; -webkit-tap-highlight-color: transparent; }
+                    .sc-log { height: 120px; font-size: 11px; }
                 }
             `;
             document.head.appendChild(style);
@@ -287,8 +247,22 @@
                 </div>
 
                 <div class="sc-input-group">
-                    <label>Spotify Playlist URL</label>
-                    <input type="text" id="sc-url-input" class="sc-input" placeholder="https://open.spotify.com/playlist/...">
+                    <label>Source</label>
+                    <div class="sc-row">
+                        <div class="sc-input-wrapper">
+                            <input type="text" id="sc-url-input" class="sc-input" placeholder="https://open.spotify.com/playlist/...">
+                        </div>
+                        <label for="sc-file-input" class="sc-btn secondary">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            JSON
+                        </label>
+                        <input type="file" id="sc-file-input" accept=".json">
+                    </div>
+                    <div id="sc-file-info" class="sc-details" style="display:none; color:#1DB954;"></div>
                 </div>
 
                 <div class="sc-progress-bar">
@@ -310,9 +284,10 @@
             modal.querySelector('#sc-close-btn').onclick = () => this.close();
             modal.querySelector('#sc-convert-btn').onclick = () => this.startConversion();
             modal.querySelector('#sc-stop-btn').onclick = () => { this.stopConversion = true; };
+            
+            // File Input Event
+            modal.querySelector('#sc-file-input').addEventListener('change', (e) => this.handleFileUpload(e));
         },
-
-
 
         createMenuButton() {
             const btn = document.createElement('button');
@@ -325,8 +300,73 @@
                 <span>Import Spotify Playlist</span>
             `;
             btn.onclick = () => this.open();
-
             this.api.ui.registerSlot('playerbar:menu', btn);
+        },
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // JSON & UTILS
+        // ═══════════════════════════════════════════════════════════════════════
+        
+        handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const fileInfo = document.getElementById('sc-file-info');
+            const urlInput = document.getElementById('sc-url-input');
+
+            this.log(`Reading file: ${file.name}...`);
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+                try {
+                    const json = JSON.parse(e.target.result);
+                    if (!Array.isArray(json)) throw new Error("JSON must be an array");
+                    
+                    this.importedPlaylistData = this.normalizeJSON(json);
+                    
+                    fileInfo.textContent = `Loaded ${this.importedPlaylistData.tracks.length} tracks from ${file.name}`;
+                    fileInfo.style.display = 'block';
+                    urlInput.placeholder = "Using imported JSON...";
+                    urlInput.value = "";
+                    urlInput.disabled = true; // Disable URL input when file is loaded
+
+                    this.log(`Parsed ${this.importedPlaylistData.tracks.length} tracks successfully`, 'success');
+
+                } catch (err) {
+                    this.log('Invalid JSON file format', 'error');
+                    console.error(err);
+                }
+            };
+
+            reader.readAsText(file);
+        },
+
+        // Helper to convert "3:45" to ms and map fields
+        normalizeJSON(jsonData) {
+            return {
+                title: 'JSON Import',
+                description: `Imported ${jsonData.length} tracks from file`,
+                tracks: jsonData.map(t => ({
+                    title: t.songTitle || t.title || 'Unknown',
+                    artist: Array.isArray(t.artist) ? t.artist.join(', ') : t.artist,
+                    album: null, // Not in export
+                    duration_ms: this.parseDurationToMs(t.duration),
+                    isrc: null // Not in export
+                }))
+            };
+        },
+
+        parseDurationToMs(timeStr) {
+            if (!timeStr) return 0;
+            try {
+                const parts = timeStr.split(':');
+                if (parts.length === 2) {
+                    const min = parseInt(parts[0], 10);
+                    const sec = parseInt(parts[1], 10);
+                    return (min * 60 + sec) * 1000;
+                }
+            } catch (e) { console.error('Duration parse error', e); }
+            return 0;
         },
 
         // ═══════════════════════════════════════════════════════════════════════
@@ -352,18 +392,15 @@
                 artist: t.artists.join(', '),
                 album: t.album,
                 duration_ms: t.duration_ms,
-                // New API doesn't seem to provide ISRC in the example, but let's keep the field
                 isrc: null
             }));
 
             return {
-                title: 'Spotify Import', // The new API doesn't seem to return playlist name in the example
+                title: 'Spotify Import', 
                 description: `Imported with ${tracks.length} tracks`,
                 tracks: tracks
             };
         },
-
-
 
         // ═══════════════════════════════════════════════════════════════════════
         // MAIN LOGIC
@@ -373,7 +410,9 @@
             this.isOpen = true;
             document.getElementById('spotify-converter-overlay').classList.add('open');
             document.getElementById('spotify-converter-modal').classList.add('open');
-            document.getElementById('sc-url-input').focus();
+            if (!document.getElementById('sc-url-input').disabled) {
+                document.getElementById('sc-url-input').focus();
+            }
         },
 
         close() {
@@ -415,22 +454,32 @@
 
         async startConversion() {
             const urlInput = document.getElementById('sc-url-input');
-            const url = urlInput.value.trim();
             const btn = document.getElementById('sc-convert-btn');
             const stopBtn = document.getElementById('sc-stop-btn');
+            const fileInfo = document.getElementById('sc-file-info');
 
-            if (!url.includes('spotify.com/playlist/')) {
-                this.log('Invalid Spotify playlist URL', 'error');
-                return;
-            }
+            let playlistData = null;
 
-            // Extract playlist ID
-            const playlistIdMatch = url.match(/playlist\/([a-zA-Z0-9]+)/);
-            if (!playlistIdMatch) {
-                this.log('Could not extract playlist ID', 'error');
-                return;
+            // 1. Determine Source (JSON File or API URL)
+            if (this.importedPlaylistData) {
+                playlistData = this.importedPlaylistData;
+                this.log(`Using Imported JSON: ${playlistData.tracks.length} tracks`);
+            } else {
+                const url = urlInput.value.trim();
+                if (!url.includes('spotify.com/playlist/')) {
+                    this.log('Invalid Spotify playlist URL', 'error');
+                    return;
+                }
+                const playlistIdMatch = url.match(/playlist\/([a-zA-Z0-9]+)/);
+                if (!playlistIdMatch) {
+                    this.log('Could not extract playlist ID', 'error');
+                    return;
+                }
+                const playlistId = playlistIdMatch[1];
+                // Fetch from API
+                this.log('Fetching playlist...', 'info');
+                playlistData = await this.fetchPlaylistFromAPI(playlistId);
             }
-            const playlistId = playlistIdMatch[1];
 
             this.isConverting = true;
             this.stopConversion = false;
@@ -440,13 +489,9 @@
             this.updateProgress(0);
 
             document.getElementById('sc-log').innerHTML = '';
-            this.log('Starting conversion...');
+            this.log(`Found ${playlistData.tracks.length} tracks`, 'success');
 
             try {
-                this.log('Fetching playlist...', 'info');
-                const playlistData = await this.fetchPlaylistFromAPI(playlistId);
-                this.log(`Found ${playlistData.tracks.length} tracks`, 'success');
-
                 // 2. Pre-fetch library map for fast dup-checking
                 this.log('Checking existing library...', 'info');
                 const existingTracks = await this.getTidalLibraryMap();
@@ -457,13 +502,10 @@
                 const audionPlaylistId = await this.api.library.createPlaylist(playlistData.title);
 
                 // 4. Process tracks concurrently
-                // Worker Pool Pattern
-                const concurrency = 5; // Run 5 searches/adds in parallel
+                const concurrency = 5; 
                 const total = playlistData.tracks.length;
                 let processed = 0;
                 let successes = 0;
-
-                // Create a queue
                 const queue = [...playlistData.tracks];
                 const activeWorkers = [];
 
@@ -472,12 +514,6 @@
                         const track = queue.shift();
 
                         try {
-                            const query = track.isrc ? `isrc:${track.isrc}` : `${track.title} ${track.artist}`;
-
-                            // Log only every 5th track or so to reduce spam, or just progress
-                            // this.log(`Searching: ${track.title}`, 'info');
-
-                            // Find best match
                             const tidalTrack = await this.searchTidal(track);
 
                             if (tidalTrack) {
@@ -503,13 +539,11 @@
 
                         } catch (err) {
                             console.error(err);
-                            // this.log(`Error processing ${track.title}`, 'error');
                             processed++;
                         }
                     }
                 };
 
-                // Start workers
                 for (let i = 0; i < concurrency; i++) {
                     activeWorkers.push(worker());
                 }
@@ -530,19 +564,18 @@
                 this.isConverting = false;
                 btn.disabled = false;
                 stopBtn.disabled = true;
-                urlInput.disabled = false;
+                // Only re-enable URL input if we aren't using a file
+                if (!this.importedPlaylistData) {
+                    urlInput.disabled = false;
+                } else {
+                    // If using file, maybe we want to reset?
+                    // Let's leave it so they can re-convert same file
+                }
             }
         },
 
         async searchTidal(sourceTrack) {
             try {
-                // 1. Try ISRC search first (Highly accurate)
-                if (sourceTrack.isrc) {
-                    // Try fetch via ISRC if API supported it, but we can stick to search for now or use the track endpoint
-                    // const res = await this.api.fetch(...) 
-                }
-
-                // Standard search
                 const query = `${sourceTrack.title} ${sourceTrack.artist}`;
                 const response = await this.api.fetch(`${this.TIDAL_API_BASE}/search/?s=${encodeURIComponent(query)}`);
 
@@ -550,22 +583,19 @@
                 const data = await response.json();
 
                 if (data.data && data.data.items && data.data.items.length > 0) {
-                    // Filter Logic:
-                    // 1. If we have duration, check if it's within tolerance (e.g. +/- 10s)
                     const matches = data.data.items;
 
+                    // Duration matching requires ms
                     if (sourceTrack.duration_ms) {
                         const sourceSec = sourceTrack.duration_ms / 1000;
                         const validDuration = matches.find(m => {
                             const diff = Math.abs(m.duration - sourceSec);
-                            return diff < 10; // 10 seconds tolerance
+                            return diff < 10; 
                         });
 
-                        // If we found a duration match, return it
                         if (validDuration) return validDuration;
                     }
 
-                    // Fallback to first result if no duration match (or no duration info)
                     return matches[0];
                 }
             } catch (e) {
@@ -577,8 +607,6 @@
         async addTrackToLibrary(tidalTrack) {
             const artistName = tidalTrack.artist?.name || tidalTrack.artists?.[0]?.name || 'Unknown Artist';
             const title = tidalTrack.title + (tidalTrack.version ? ` (${tidalTrack.version})` : '');
-
-            // High res cover if available
             const coverUrl = tidalTrack.album?.cover
                 ? `https://resources.tidal.com/images/${tidalTrack.album.cover.replace(/-/g, '/')}/1280x1280.jpg`
                 : null;
