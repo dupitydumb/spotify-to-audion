@@ -3,10 +3,6 @@
     // SPOTIFY CONVERTER PLUGIN - API VERSION
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // PLUGIN LOGIC
-    // ═══════════════════════════════════════════════════════════════════════════
-
     const SpotifyConverter = {
         name: 'Spotify Converter',
         api: null,
@@ -14,7 +10,7 @@
         isOpen: false,
         isConverting: false,
         stopConversion: false,
-        importedPlaylistData: null, // Store loaded JSON data here
+        importedPlaylistData: null,
 
         // API endpoints
         TIDAL_API_BASE: 'https://katze.qqdl.site',
@@ -46,7 +42,7 @@
                     border: 1px solid var(--border-color, #404040);
                     border-radius: 16px;
                     padding: 24px;
-                    width: 500px;
+                    width: 550px;
                     max-width: 90vw;
                     z-index: 10001;
                     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
@@ -95,9 +91,7 @@
                     gap: 10px;
                 }
 
-                .sc-icon {
-                    color: #1DB954;
-                }
+                .sc-icon { color: #1DB954; }
 
                 .sc-close-btn {
                     background: transparent;
@@ -118,39 +112,51 @@
                 .sc-row {
                     display: flex;
                     gap: 10px;
-                    align-items: stretch;
+                    align-items: center;
                 }
                 
                 .sc-input-wrapper {
                     flex-grow: 1;
+                    position: relative;
                 }
 
-                .sc-details {
+                .sc-clear-file {
+                    position: absolute;
+                    right: 10px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    background: #555;
+                    border: none;
+                    border-radius: 50%;
+                    width: 20px;
+                    height: 20px;
+                    color: white;
                     font-size: 12px;
-                    color: #888;
-                    margin-top: -4px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    z-index: 2;
                 }
-
+                
                 .sc-input {
                     background: var(--bg-surface, #282828);
                     border: 1px solid var(--border-color, #404040);
                     color: var(--text-primary, #fff);
                     padding: 12px;
+                    padding-right: 35px;
                     border-radius: 8px;
                     font-size: 14px;
                     width: 100%;
                     box-sizing: border-box;
                 }
-                .sc-input:focus {
-                    outline: none;
-                    border-color: #1DB954;
-                }
+                .sc-input:focus { outline: none; border-color: #1DB954; }
 
                 .sc-btn {
                     background: #1DB954;
                     color: #fff;
                     border: none;
-                    padding: 12px;
+                    padding: 12px 16px;
                     border-radius: 8px;
                     font-weight: 600;
                     cursor: pointer;
@@ -158,68 +164,82 @@
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    gap: 6px;
+                    gap: 8px;
+                    white-space: nowrap;
                 }
                 .sc-btn:hover:not(:disabled) { transform: scale(1.02); filter: brightness(1.1); }
                 .sc-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-                .sc-btn.secondary { background: var(--bg-highlight, #3e3e3e); color: #fff; border: 1px solid #555; }
                 
-                /* File Input hidden, triggered by label */
+                .sc-btn.secondary {
+                    background: #282828;
+                    color: #fff;
+                    border: 1px solid #555;
+                }
+                .sc-btn.secondary:hover {
+                    background: #333;
+                    border-color: #fff;
+                }
+
                 #sc-file-input { display: none; }
+
+                .sc-file-info {
+                    font-size: 12px;
+                    color: #1DB954;
+                    margin-top: 4px;
+                    display: none;
+                }
 
                 .sc-log {
                     background: #000;
                     border-radius: 8px;
                     padding: 12px;
-                    height: 150px;
+                    height: 180px;
                     overflow-y: auto;
-                    font-family: monospace;
-                    font-size: 12px;
-                    color: #bbb;
+                    font-family: 'Courier New', monospace;
+                    font-size: 11px;
+                    color: #ccc;
                     display: flex;
                     flex-direction: column;
-                    gap: 4px;
+                    gap: 2px;
                 }
+                
+                .sc-log-item {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+
                 .sc-log-item.success { color: #1DB954; }
                 .sc-log-item.error { color: #ff5555; }
                 .sc-log-item.warn { color: #ffb86c; }
+                .sc-log-item.info { color: #888; }
 
                 .sc-progress-bar {
-                    height: 6px;
+                    height: 4px;
                     background: var(--bg-highlight, #3e3e3e);
-                    border-radius: 3px;
+                    border-radius: 2px;
                     overflow: hidden;
                 }
                 .sc-progress-value {
                     height: 100%;
                     background: #1DB954;
                     width: 0%;
-                    transition: width 0.3s;
+                    transition: width 0.2s;
                 }
 
-                /* ═══ Mobile Responsive ═══ */
                 @media (max-width: 768px) {
                     #spotify-converter-modal {
-                        width: 100vw;
-                        height: 100vh;
-                        max-width: 100vw;
-                        max-height: 100vh;
-                        top: 0; left: 0;
-                        transform: none;
-                        border-radius: 0;
-                        border: none;
-                        padding: 16px;
-                        gap: 14px;
-                        justify-content: flex-start;
+                        width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh;
+                        top: 0; left: 0; transform: none; border-radius: 0; border: none;
+                        padding: 16px; gap: 14px; justify-content: flex-start;
                     }
                     #spotify-converter-modal.open { transform: none; }
-
                     .sc-header h2 { font-size: 18px; }
                     .sc-close-btn { min-width: 44px; min-height: 44px; }
-                    .sc-row { flex-direction: column; }
-                    .sc-input { font-size: 16px; padding: 14px 12px; }
-                    .sc-btn { min-height: 48px; font-size: 15px; -webkit-tap-highlight-color: transparent; }
-                    .sc-log { height: 120px; font-size: 11px; }
+                    .sc-row { flex-direction: column; align-items: stretch; }
+                    .sc-input { font-size: 16px; padding: 14px 35px 14px 12px; }
+                    .sc-btn { min-height: 48px; width: 100%; }
+                    .sc-log { height: 200px; font-size: 10px; }
                 }
             `;
             document.head.appendChild(style);
@@ -239,7 +259,7 @@
                         <svg class="sc-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141 4.32-1.38 9.841-.719 13.44 1.56.42.3.6.84.3 1.26zm.12-3.36C14.939 8.46 8.641 8.28 5.1 9.421c-.6.18-1.26-.12-1.441-.72-.18-.6.12-1.26.72-1.44 4.08-1.26 11.04-1.02 15.361 1.56.6.358.779 1.14.421 1.74-.359.6-1.14.779-1.741.419z"/>
                         </svg>
-                        Spotify to Audion
+                        Spotify Import
                     </h2>
                     <div style="display:flex; gap:8px;">
                         <button class="sc-close-btn" id="sc-close-btn">✕</button>
@@ -251,8 +271,10 @@
                     <div class="sc-row">
                         <div class="sc-input-wrapper">
                             <input type="text" id="sc-url-input" class="sc-input" placeholder="https://open.spotify.com/playlist/...">
+                            <div id="sc-clear-file" class="sc-clear-file" style="display:none;">✕</div>
                         </div>
-                        <label for="sc-file-input" class="sc-btn secondary">
+                        
+                        <label for="sc-file-input" class="sc-btn secondary" id="sc-upload-btn-label">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                                 <polyline points="17 8 12 3 7 8"></polyline>
@@ -262,7 +284,7 @@
                         </label>
                         <input type="file" id="sc-file-input" accept=".json">
                     </div>
-                    <div id="sc-file-info" class="sc-details" style="display:none; color:#1DB954;"></div>
+                    <div id="sc-file-info" class="sc-file-info"></div>
                 </div>
 
                 <div class="sc-progress-bar">
@@ -280,13 +302,12 @@
             `;
             document.body.appendChild(modal);
 
-            // Events
             modal.querySelector('#sc-close-btn').onclick = () => this.close();
             modal.querySelector('#sc-convert-btn').onclick = () => this.startConversion();
             modal.querySelector('#sc-stop-btn').onclick = () => { this.stopConversion = true; };
             
-            // File Input Event
             modal.querySelector('#sc-file-input').addEventListener('change', (e) => this.handleFileUpload(e));
+            modal.querySelector('#sc-clear-file').addEventListener('click', () => this.clearFile());
         },
 
         createMenuButton() {
@@ -297,7 +318,7 @@
                     <path d="M2 12h20M2 12l5-5m-5 5l5 5"/>
                     <circle cx="12" cy="12" r="10"/>
                 </svg>
-                <span>Import Spotify Playlist</span>
+                <span>Import Spotify</span>
             `;
             btn.onclick = () => this.open();
             this.api.ui.registerSlot('playerbar:menu', btn);
@@ -313,6 +334,8 @@
 
             const fileInfo = document.getElementById('sc-file-info');
             const urlInput = document.getElementById('sc-url-input');
+            const clearBtn = document.getElementById('sc-clear-file');
+            const uploadBtnLabel = document.getElementById('sc-upload-btn-label');
 
             this.log(`Reading file: ${file.name}...`);
             const reader = new FileReader();
@@ -326,22 +349,44 @@
                     
                     fileInfo.textContent = `Loaded ${this.importedPlaylistData.tracks.length} tracks from ${file.name}`;
                     fileInfo.style.display = 'block';
-                    urlInput.placeholder = "Using imported JSON...";
-                    urlInput.value = "";
-                    urlInput.disabled = true; // Disable URL input when file is loaded
+                    urlInput.value = ""; 
+                    urlInput.placeholder = "Using imported JSON file...";
+                    urlInput.disabled = true;
+                    
+                    clearBtn.style.display = 'flex';
+                    uploadBtnLabel.style.display = 'none'; 
 
                     this.log(`Parsed ${this.importedPlaylistData.tracks.length} tracks successfully`, 'success');
 
                 } catch (err) {
                     this.log('Invalid JSON file format', 'error');
                     console.error(err);
+                    event.target.value = ''; 
                 }
             };
 
             reader.readAsText(file);
         },
 
-        // Helper to convert "3:45" to ms and map fields
+        clearFile() {
+            this.importedPlaylistData = null;
+            const fileInput = document.getElementById('sc-file-input');
+            const urlInput = document.getElementById('sc-url-input');
+            const fileInfo = document.getElementById('sc-file-info');
+            const clearBtn = document.getElementById('sc-clear-file');
+            const uploadBtnLabel = document.getElementById('sc-upload-btn-label');
+
+            fileInput.value = '';
+            urlInput.value = '';
+            urlInput.disabled = false;
+            urlInput.placeholder = "https://open.spotify.com/playlist/...";
+            fileInfo.style.display = 'none';
+            clearBtn.style.display = 'none';
+            uploadBtnLabel.style.display = 'flex';
+            
+            this.log('File cleared.', 'info');
+        },
+
         normalizeJSON(jsonData) {
             return {
                 title: 'JSON Import',
@@ -349,9 +394,9 @@
                 tracks: jsonData.map(t => ({
                     title: t.songTitle || t.title || 'Unknown',
                     artist: Array.isArray(t.artist) ? t.artist.join(', ') : t.artist,
-                    album: null, // Not in export
+                    album: null, 
                     duration_ms: this.parseDurationToMs(t.duration),
-                    isrc: null // Not in export
+                    isrc: null 
                 }))
             };
         },
@@ -374,7 +419,7 @@
         // ═══════════════════════════════════════════════════════════════════════
 
         async fetchPlaylistFromAPI(playlistId) {
-            this.log(`Fetching playlist from new API...`, 'info');
+            this.log(`Fetching playlist from API...`, 'info');
             const response = await this.api.fetch(`${this.NEW_SPOTIFY_API_BASE}/${playlistId}`);
 
             if (!response.ok) {
@@ -426,9 +471,19 @@
             const log = document.getElementById('sc-log');
             const item = document.createElement('div');
             item.className = `sc-log-item ${type}`;
-            item.textContent = `> ${msg}`;
+            
+            let icon = '';
+            if (type === 'success') icon = '✅ ';
+            else if (type === 'error') icon = '❌ ';
+            else if (type === 'warn') icon = '⏭ ';
+            
+            item.textContent = `${icon}${msg}`;
             log.appendChild(item);
             log.scrollTop = log.scrollHeight;
+
+            if (log.children.length > 200) {
+                log.removeChild(log.firstChild);
+            }
         },
 
         updateProgress(percent) {
@@ -456,11 +511,9 @@
             const urlInput = document.getElementById('sc-url-input');
             const btn = document.getElementById('sc-convert-btn');
             const stopBtn = document.getElementById('sc-stop-btn');
-            const fileInfo = document.getElementById('sc-file-info');
 
             let playlistData = null;
 
-            // 1. Determine Source (JSON File or API URL)
             if (this.importedPlaylistData) {
                 playlistData = this.importedPlaylistData;
                 this.log(`Using Imported JSON: ${playlistData.tracks.length} tracks`);
@@ -476,7 +529,7 @@
                     return;
                 }
                 const playlistId = playlistIdMatch[1];
-                // Fetch from API
+                
                 this.log('Fetching playlist...', 'info');
                 playlistData = await this.fetchPlaylistFromAPI(playlistId);
             }
@@ -489,19 +542,16 @@
             this.updateProgress(0);
 
             document.getElementById('sc-log').innerHTML = '';
-            this.log(`Found ${playlistData.tracks.length} tracks`, 'success');
+            this.log(`Found ${playlistData.tracks.length} tracks. Starting conversion...`, 'info');
 
             try {
-                // 2. Pre-fetch library map for fast dup-checking
                 this.log('Checking existing library...', 'info');
                 const existingTracks = await this.getTidalLibraryMap();
                 this.log(`Loaded ${existingTracks.size} existing Tidal tracks`, 'info');
 
-                // 3. Create Audion playlist
                 this.log('Creating local playlist...', 'info');
                 const audionPlaylistId = await this.api.library.createPlaylist(playlistData.title);
 
-                // 4. Process tracks concurrently
                 const concurrency = 5; 
                 const total = playlistData.tracks.length;
                 let processed = 0;
@@ -519,26 +569,37 @@
                             if (tidalTrack) {
                                 const tidalId = String(tidalTrack.id);
                                 let trackId;
+                                let wasAlreadyInLibrary = existingTracks.has(tidalId);
 
-                                if (existingTracks.has(tidalId)) {
+                                // 1. Add to library if new
+                                if (wasAlreadyInLibrary) {
                                     trackId = existingTracks.get(tidalId);
                                 } else {
                                     trackId = await this.addTrackToLibrary(tidalTrack);
                                     existingTracks.set(tidalId, trackId);
                                 }
 
+                                // 2. Add to Playlist (This step can fail)
                                 await this.api.library.addTrackToPlaylist(audionPlaylistId, trackId);
-                                successes++;
+
+                                // 3. Log SUCCESS only after both steps work
+                                if (wasAlreadyInLibrary) {
+                                    this.log(`Added: ${track.title} (Lib)`, 'warn');
+                                } else {
+                                    this.log(`Added: ${track.title}`, 'success');
+                                    successes++;
+                                }
+                            } else {
+                                this.log(`Not Found: ${track.title} - ${track.artist}`, 'error');
                             }
 
                             processed++;
-                            if (processed % 5 === 0 || processed === total) {
-                                this.updateProgress((processed / total) * 100);
-                                this.log(`Processed ${processed}/${total} tracks...`, 'info');
-                            }
+                            this.updateProgress((processed / total) * 100);
 
                         } catch (err) {
                             console.error(err);
+                            // Log Error if playlist add or library add fails
+                            this.log(`Error: ${track.title}`, 'error');
                             processed++;
                         }
                     }
@@ -564,12 +625,8 @@
                 this.isConverting = false;
                 btn.disabled = false;
                 stopBtn.disabled = true;
-                // Only re-enable URL input if we aren't using a file
                 if (!this.importedPlaylistData) {
                     urlInput.disabled = false;
-                } else {
-                    // If using file, maybe we want to reset?
-                    // Let's leave it so they can re-convert same file
                 }
             }
         },
@@ -585,7 +642,6 @@
                 if (data.data && data.data.items && data.data.items.length > 0) {
                     const matches = data.data.items;
 
-                    // Duration matching requires ms
                     if (sourceTrack.duration_ms) {
                         const sourceSec = sourceTrack.duration_ms / 1000;
                         const validDuration = matches.find(m => {
