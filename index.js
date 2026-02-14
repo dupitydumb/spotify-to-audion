@@ -14,7 +14,7 @@
 
         // API endpoints
         TIDAL_API_BASE: 'https://katze.qqdl.site',
-        NEW_SPOTIFY_API_BASE: 'https://spotify-api-6y41.vercel.app/api/playlist',
+        NEW_SPOTIFY_API_BASE: 'https://playlist.audionplayer.com/api/playlist',
 
         async init(api) {
             console.log('[SpotifyConverter] Initializing...');
@@ -690,3 +690,4 @@
         window.AudionPlugin = SpotifyConverter;
     }
 })();
+
