@@ -420,30 +420,51 @@
 
         async fetchPlaylistFromAPI(playlistId) {
             this.log(`Fetching playlist from API...`, 'info');
-            const response = await this.api.fetch(`${this.NEW_SPOTIFY_API_BASE}/${playlistId}`);
 
-            if (!response.ok) {
-                throw new Error(`Failed to fetch playlist data: ${response.status}`);
+            const allTracks = [];
+            let offset = 0; // Unlimits 100 track import 
+            const limit = 100;
+            let total = null;
+
+            while (true) {
+               const response = await this.api.fetch(
+                  `${this.NEW_SPOTIFY_API_BASE}/${playlistId}?limit=${limit}&offset=${offset}`
+                );
+
+                if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`);
+
+                const json = await response.json();
+                if (!json.success || !json.data) throw new Error('Invalid response from Spotify API');
+
+                const data = json.data;
+
+              // Saves total tracks in first call
+                if (total === null) {
+                   total = data.total;
+                   this.log(`Playlist has ${total} tracks total`, 'info');
+                }
+
+                const tracks = data.tracks.map(t => ({
+                    title: t.name,
+                    artist: t.artists.join(', '),
+                    album: t.album,
+                    duration_ms: t.duration_ms,
+                    isrc: null
+                }));
+
+                allTracks.push(...tracks);
+                this.log(`Fetched ${allTracks.length}/${total} tracks...`, 'info');
+
+                // Stops when no "next" page available
+                if (!data.next || allTracks.length >= total) break;
+
+                offset += limit;
             }
-
-            const json = await response.json();
-            if (!json.success || !json.data) {
-                throw new Error('Invalid response from Spotify API');
-            }
-
-            const data = json.data;
-            const tracks = data.tracks.map(t => ({
-                title: t.name,
-                artist: t.artists.join(', '),
-                album: t.album,
-                duration_ms: t.duration_ms,
-                isrc: null
-            }));
 
             return {
-                title: 'Spotify Import', 
-                description: `Imported with ${tracks.length} tracks`,
-                tracks: tracks
+                title: 'Spotify Import',
+                description: `Imported with ${allTracks.length} tracks`,
+                tracks: allTracks
             };
         },
 
