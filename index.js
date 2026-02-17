@@ -3,6 +3,10 @@
     // SPOTIFY CONVERTER PLUGIN - API VERSION
     // ═══════════════════════════════════════════════════════════════════════════
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PLUGIN LOGIC
+    // ═══════════════════════════════════════════════════════════════════════════
+
     const SpotifyConverter = {
         name: 'Spotify Converter',
         api: null,
@@ -12,9 +16,22 @@
         stopConversion: false,
         importedPlaylistData: null,
 
-        // API endpoints
-        TIDAL_API_BASE: 'https://katze.qqdl.site',
+        // API endpoints - Multiple endpoints for load distribution
+        TIDAL_SEARCH_ENDPOINTS: [
+            'https://hund.qqdl.site',
+            'https://katze.qqdl.site',
+            'https://tidal.kinoplus.online',
+            'https://maus.qqdl.site',
+            'https://arran.monochrome.tf'
+        ],
         NEW_SPOTIFY_API_BASE: 'https://playlist.audionplayer.com/api/playlist',
+        DELAY_PER_TRACK_MS: 150, // Delay between track processing to avoid rate limits
+
+        // Helper function to get a random search endpoint
+        getRandomSearchEndpoint() {
+            const endpoints = this.TIDAL_SEARCH_ENDPOINTS;
+            return endpoints[Math.floor(Math.random() * endpoints.length)];
+        },
 
         async init(api) {
             console.log('[SpotifyConverter] Initializing...');
@@ -42,7 +59,7 @@
                     border: 1px solid var(--border-color, #404040);
                     border-radius: 16px;
                     padding: 24px;
-                    width: 550px;
+                    width: 500px;
                     max-width: 90vw;
                     z-index: 10001;
                     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
@@ -91,7 +108,9 @@
                     gap: 10px;
                 }
 
-                .sc-icon { color: #1DB954; }
+                .sc-icon {
+                    color: #1DB954;
+                }
 
                 .sc-close-btn {
                     background: transparent;
@@ -139,6 +158,12 @@
                     z-index: 2;
                 }
                 
+                .sc-details {
+                    font-size: 12px;
+                    color: #888;
+                    margin-top: -4px;
+                }
+
                 .sc-input {
                     background: var(--bg-surface, #282828);
                     border: 1px solid var(--border-color, #404040);
@@ -150,7 +175,10 @@
                     width: 100%;
                     box-sizing: border-box;
                 }
-                .sc-input:focus { outline: none; border-color: #1DB954; }
+                .sc-input:focus {
+                    outline: none;
+                    border-color: #1DB954;
+                }
 
                 .sc-btn {
                     background: #1DB954;
@@ -169,8 +197,7 @@
                 }
                 .sc-btn:hover:not(:disabled) { transform: scale(1.02); filter: brightness(1.1); }
                 .sc-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-                
-                .sc-btn.secondary {
+                .sc-btn.secondary { 
                     background: #282828;
                     color: #fff;
                     border: 1px solid #555;
@@ -188,58 +215,118 @@
                     margin-top: 4px;
                     display: none;
                 }
+                .sc-btn.help { 
+                    background: transparent; 
+                    border: 1px solid var(--border-color, #404040); 
+                    color: var(--text-secondary, #b3b3b3);
+                    padding: 8px 12px;
+                    font-size: 12px;
+                }
+                .sc-btn.help:hover {
+                    border-color: #1DB954;
+                    color: #1DB954;
+                }
+
+                .sc-help-box {
+                    background: var(--bg-surface, #282828);
+                    border: 1px solid var(--border-color, #404040);
+                    border-radius: 8px;
+                    padding: 16px;
+                    margin-bottom: 16px;
+                    font-size: 13px;
+                    color: var(--text-secondary, #b3b3b3);
+                    display: none;
+                }
+                .sc-help-box.visible { display: block; }
+                .sc-help-box a { color: #1DB954; text-decoration: none; }
+                .sc-help-box ul { margin: 8px 0; padding-left: 20px; }
+                .sc-help-box li { margin-bottom: 4px; }
 
                 .sc-log {
                     background: #000;
                     border-radius: 8px;
                     padding: 12px;
-                    height: 180px;
+                    height: 150px;
                     overflow-y: auto;
-                    font-family: 'Courier New', monospace;
-                    font-size: 11px;
-                    color: #ccc;
+                    font-family: monospace;
+                    font-size: 12px;
+                    color: #bbb;
                     display: flex;
                     flex-direction: column;
-                    gap: 2px;
+                    gap: 4px;
                 }
-                
-                .sc-log-item {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                }
-
                 .sc-log-item.success { color: #1DB954; }
                 .sc-log-item.error { color: #ff5555; }
                 .sc-log-item.warn { color: #ffb86c; }
-                .sc-log-item.info { color: #888; }
 
                 .sc-progress-bar {
-                    height: 4px;
+                    height: 6px;
                     background: var(--bg-highlight, #3e3e3e);
-                    border-radius: 2px;
+                    border-radius: 3px;
                     overflow: hidden;
                 }
                 .sc-progress-value {
                     height: 100%;
                     background: #1DB954;
                     width: 0%;
-                    transition: width 0.2s;
+                    transition: width 0.3s;
                 }
 
+                /* ═══ Mobile Responsive ═══ */
                 @media (max-width: 768px) {
                     #spotify-converter-modal {
-                        width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh;
-                        top: 0; left: 0; transform: none; border-radius: 0; border: none;
-                        padding: 16px; gap: 14px; justify-content: flex-start;
+                        width: 100vw;
+                        height: 100vh;
+                        max-width: 100vw;
+                        max-height: 100vh;
+                        top: 0; left: 0;
+                        transform: none;
+                        border-radius: 0;
+                        border: none;
+                        padding: 16px;
+                        gap: 14px;
+                        justify-content: flex-start;
                     }
-                    #spotify-converter-modal.open { transform: none; }
-                    .sc-header h2 { font-size: 18px; }
-                    .sc-close-btn { min-width: 44px; min-height: 44px; }
-                    .sc-row { flex-direction: column; align-items: stretch; }
-                    .sc-input { font-size: 16px; padding: 14px 35px 14px 12px; }
-                    .sc-btn { min-height: 48px; width: 100%; }
-                    .sc-log { height: 200px; font-size: 10px; }
+                    #spotify-converter-modal.open {
+                        transform: none;
+                    }
+
+                    .sc-header h2 {
+                        font-size: 18px;
+                    }
+                    .sc-close-btn {
+                        min-width: 44px;
+                        min-height: 44px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        -webkit-tap-highlight-color: transparent;
+                    }
+
+                    .sc-input {
+                        font-size: 16px; /* prevent iOS zoom */
+                        padding: 14px 12px;
+                    }
+
+                    .sc-btn {
+                        min-height: 48px;
+                        font-size: 15px;
+                        -webkit-tap-highlight-color: transparent;
+                    }
+                    .sc-btn.help {
+                        min-height: 44px;
+                        font-size: 13px;
+                    }
+
+                    .sc-log {
+                        height: 120px;
+                        font-size: 11px;
+                    }
+
+                    .sc-help-box {
+                        font-size: 12px;
+                        padding: 12px;
+                    }
                 }
             `;
             document.head.appendChild(style);
@@ -259,7 +346,7 @@
                         <svg class="sc-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141 4.32-1.38 9.841-.719 13.44 1.56.42.3.6.84.3 1.26zm.12-3.36C14.939 8.46 8.641 8.28 5.1 9.421c-.6.18-1.26-.12-1.441-.72-.18-.6.12-1.26.72-1.44 4.08-1.26 11.04-1.02 15.361 1.56.6.358.779 1.14.421 1.74-.359.6-1.14.779-1.741.419z"/>
                         </svg>
-                        Spotify Import
+                        Spotify to Audion
                     </h2>
                     <div style="display:flex; gap:8px;">
                         <button class="sc-close-btn" id="sc-close-btn">✕</button>
@@ -287,6 +374,20 @@
                     <div id="sc-file-info" class="sc-file-info"></div>
                 </div>
 
+                <div class="sc-help-box" id="sc-help-box">
+                    <strong>💡 Alternative Method:</strong> If the automatic conversion fails, you can manually import the playlist data:
+                    <ol style="margin: 8px 0; padding-left: 20px;">
+                        <li>Visit <a href="https://playlist.audionplayer.com" target="_blank">playlist.audionplayer.com</a></li>
+                        <li>Paste your Spotify playlist URL there to get the JSON data</li>
+                        <li>Copy the JSON response</li>
+                        <li>Use the JSON import feature in Audion to import the tracks</li>
+                    </ol>
+                </div>
+
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
+                    <button class="sc-btn help" id="sc-help-toggle">ℹ️ Show Help</button>
+                </div>
+
                 <div class="sc-progress-bar">
                     <div class="sc-progress-value" id="sc-progress"></div>
                 </div>
@@ -302,13 +403,30 @@
             `;
             document.body.appendChild(modal);
 
+            // Events
             modal.querySelector('#sc-close-btn').onclick = () => this.close();
             modal.querySelector('#sc-convert-btn').onclick = () => this.startConversion();
             modal.querySelector('#sc-stop-btn').onclick = () => { this.stopConversion = true; };
-            
             modal.querySelector('#sc-file-input').addEventListener('change', (e) => this.handleFileUpload(e));
             modal.querySelector('#sc-clear-file').addEventListener('click', () => this.clearFile());
+
+            // Toggle help box
+            modal.querySelector('#sc-help-toggle').onclick = () => {
+                const helpBox = document.getElementById('sc-help-box');
+                const btn = document.getElementById('sc-help-toggle');
+                const isVisible = helpBox.classList.contains('visible');
+
+                if (isVisible) {
+                    helpBox.classList.remove('visible');
+                    btn.textContent = 'ℹ️ Show Help';
+                } else {
+                    helpBox.classList.add('visible');
+                    btn.textContent = 'ℹ️ Hide Help';
+                }
+            };
         },
+
+
 
         createMenuButton() {
             const btn = document.createElement('button');
@@ -318,16 +436,17 @@
                     <path d="M2 12h20M2 12l5-5m-5 5l5 5"/>
                     <circle cx="12" cy="12" r="10"/>
                 </svg>
-                <span>Import Spotify</span>
+                <span>Import Spotify Playlist</span>
             `;
             btn.onclick = () => this.open();
+
             this.api.ui.registerSlot('playerbar:menu', btn);
         },
 
         // ═══════════════════════════════════════════════════════════════════════
-        // JSON & UTILS
+        // JSON IMPORT & UTILITIES
         // ═══════════════════════════════════════════════════════════════════════
-        
+
         handleFileUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -344,24 +463,24 @@
                 try {
                     const json = JSON.parse(e.target.result);
                     if (!Array.isArray(json)) throw new Error("JSON must be an array");
-                    
+
                     this.importedPlaylistData = this.normalizeJSON(json);
-                    
+
                     fileInfo.textContent = `Loaded ${this.importedPlaylistData.tracks.length} tracks from ${file.name}`;
                     fileInfo.style.display = 'block';
-                    urlInput.value = ""; 
+                    urlInput.value = "";
                     urlInput.placeholder = "Using imported JSON file...";
                     urlInput.disabled = true;
-                    
+
                     clearBtn.style.display = 'flex';
-                    uploadBtnLabel.style.display = 'none'; 
+                    uploadBtnLabel.style.display = 'none';
 
                     this.log(`Parsed ${this.importedPlaylistData.tracks.length} tracks successfully`, 'success');
 
                 } catch (err) {
                     this.log('Invalid JSON file format', 'error');
                     console.error(err);
-                    event.target.value = ''; 
+                    event.target.value = '';
                 }
             };
 
@@ -383,7 +502,7 @@
             fileInfo.style.display = 'none';
             clearBtn.style.display = 'none';
             uploadBtnLabel.style.display = 'flex';
-            
+
             this.log('File cleared.', 'info');
         },
 
@@ -394,9 +513,9 @@
                 tracks: jsonData.map(t => ({
                     title: t.songTitle || t.title || 'Unknown',
                     artist: Array.isArray(t.artist) ? t.artist.join(', ') : t.artist,
-                    album: null, 
+                    album: null,
                     duration_ms: this.parseDurationToMs(t.duration),
-                    isrc: null 
+                    isrc: null
                 }))
             };
         },
@@ -419,7 +538,7 @@
         // ═══════════════════════════════════════════════════════════════════════
 
         async fetchPlaylistFromAPI(playlistId) {
-            this.log(`Fetching playlist from API...`, 'info');
+            this.log(`Fetching playlist from new API...`, 'info');
             const response = await this.api.fetch(`${this.NEW_SPOTIFY_API_BASE}/${playlistId}`);
 
             if (!response.ok) {
@@ -437,15 +556,18 @@
                 artist: t.artists.join(', '),
                 album: t.album,
                 duration_ms: t.duration_ms,
+                // New API doesn't seem to provide ISRC in the example, but let's keep the field
                 isrc: null
             }));
 
             return {
-                title: 'Spotify Import', 
+                title: 'Spotify Import', // The new API doesn't seem to return playlist name in the example
                 description: `Imported with ${tracks.length} tracks`,
                 tracks: tracks
             };
         },
+
+
 
         // ═══════════════════════════════════════════════════════════════════════
         // MAIN LOGIC
@@ -455,9 +577,7 @@
             this.isOpen = true;
             document.getElementById('spotify-converter-overlay').classList.add('open');
             document.getElementById('spotify-converter-modal').classList.add('open');
-            if (!document.getElementById('sc-url-input').disabled) {
-                document.getElementById('sc-url-input').focus();
-            }
+            document.getElementById('sc-url-input').focus();
         },
 
         close() {
@@ -471,19 +591,9 @@
             const log = document.getElementById('sc-log');
             const item = document.createElement('div');
             item.className = `sc-log-item ${type}`;
-            
-            let icon = '';
-            if (type === 'success') icon = '✅ ';
-            else if (type === 'error') icon = '❌ ';
-            else if (type === 'warn') icon = '⏭ ';
-            
-            item.textContent = `${icon}${msg}`;
+            item.textContent = `> ${msg}`;
             log.appendChild(item);
             log.scrollTop = log.scrollHeight;
-
-            if (log.children.length > 200) {
-                log.removeChild(log.firstChild);
-            }
         },
 
         updateProgress(percent) {
@@ -514,6 +624,7 @@
 
             let playlistData = null;
 
+            // Check if using imported JSON or URL
             if (this.importedPlaylistData) {
                 playlistData = this.importedPlaylistData;
                 this.log(`Using Imported JSON: ${playlistData.tracks.length} tracks`);
@@ -529,9 +640,15 @@
                     return;
                 }
                 const playlistId = playlistIdMatch[1];
-                
+
                 this.log('Fetching playlist...', 'info');
-                playlistData = await this.fetchPlaylistFromAPI(playlistId);
+                try {
+                    playlistData = await this.fetchPlaylistFromAPI(playlistId);
+                } catch (err) {
+                    console.error(err);
+                    this.log(`Error: ${err.message}`, 'error');
+                    return;
+                }
             }
 
             this.isConverting = true;
@@ -542,79 +659,141 @@
             this.updateProgress(0);
 
             document.getElementById('sc-log').innerHTML = '';
-            this.log(`Found ${playlistData.tracks.length} tracks. Starting conversion...`, 'info');
+            this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
+            this.log(`📝 Playlist: ${playlistData.title}`, 'info');
+            this.log(`🎵 Found ${playlistData.tracks.length} tracks to convert`, 'info');
+            this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
 
             try {
-                this.log('Checking existing library...', 'info');
+
+                // 2. Pre-fetch library map for fast dup-checking
+                this.log('🔍 Checking existing library...', 'info');
                 const existingTracks = await this.getTidalLibraryMap();
-                this.log(`Loaded ${existingTracks.size} existing Tidal tracks`, 'info');
+                this.log(`📚 Loaded ${existingTracks.size} existing Tidal tracks`, 'info');
 
-                this.log('Creating local playlist...', 'info');
+                // 3. Create Audion playlist
+                this.log('📝 Creating playlist in library...', 'info');
                 const audionPlaylistId = await this.api.library.createPlaylist(playlistData.title);
+                this.log(`✅ Playlist created. Starting track search...`, 'success');
+                this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
 
-                const concurrency = 5; 
+                // ── PHASE 1: Search Tidal concurrently (fast) ──
                 const total = playlistData.tracks.length;
-                let processed = 0;
+                let searched = 0;
                 let successes = 0;
-                const queue = [...playlistData.tracks];
-                const activeWorkers = [];
+                let fromLibrary = 0;
+                let notFound = 0;
+                const foundTracks = []; // Collect results: { track, tidalTrack, trackId, wasInLibrary }
 
-                const worker = async () => {
+                this.log(`⚡ Phase 1: Searching Tidal for matches...`, 'info');
+
+                const concurrency = 5;
+                const queue = [...playlistData.tracks];
+                const searchWorkers = [];
+
+                const searchWorker = async () => {
                     while (queue.length > 0 && !this.stopConversion) {
                         const track = queue.shift();
 
                         try {
+                            if (searched > 0) {
+                                await new Promise(resolve => setTimeout(resolve, 50)); // Small 50ms delay for UI smoothness
+                            }
+
+                            const truncatedTitle = track.title.length > 30 ? track.title.substring(0, 30) + '...' : track.title;
+                            this.log(`🔍 Searching: ${truncatedTitle}`, 'info');
+
                             const tidalTrack = await this.searchTidal(track);
 
                             if (tidalTrack) {
                                 const tidalId = String(tidalTrack.id);
                                 let trackId;
-                                let wasAlreadyInLibrary = existingTracks.has(tidalId);
+                                let wasInLibrary = existingTracks.has(tidalId);
 
-                                // 1. Add to library if new
-                                if (wasAlreadyInLibrary) {
+                                if (wasInLibrary) {
                                     trackId = existingTracks.get(tidalId);
+                                    this.log(`📚 Found (Library): ${truncatedTitle}`, 'warn');
                                 } else {
                                     trackId = await this.addTrackToLibrary(tidalTrack);
                                     existingTracks.set(tidalId, trackId);
+                                    this.log(`✅ Found: ${truncatedTitle}`, 'success');
                                 }
 
-                                // 2. Add to Playlist (This step can fail)
-                                await this.api.library.addTrackToPlaylist(audionPlaylistId, trackId);
-
-                                // 3. Log SUCCESS only after both steps work
-                                if (wasAlreadyInLibrary) {
-                                    this.log(`Added: ${track.title} (Lib)`, 'warn');
-                                } else {
-                                    this.log(`Added: ${track.title}`, 'success');
-                                    successes++;
-                                }
+                                foundTracks.push({ track, trackId, wasInLibrary, truncatedTitle });
                             } else {
-                                this.log(`Not Found: ${track.title} - ${track.artist}`, 'error');
+                                notFound++;
+                                this.log(`❌ Not Found: ${truncatedTitle}`, 'error');
                             }
-
-                            processed++;
-                            this.updateProgress((processed / total) * 100);
 
                         } catch (err) {
                             console.error(err);
-                            // Log Error if playlist add or library add fails
-                            this.log(`Error: ${track.title}`, 'error');
-                            processed++;
+                            notFound++;
+                            this.log(`❌ Error searching: ${track.title}`, 'error');
+                        }
+
+                        searched++;
+                        if (searched % 5 === 0 || searched === total) {
+                            this.updateProgress((searched / total) * 50); // Phase 1 = 0-50%
+                            this.log(`📊 Search: ${searched}/${total} | Found: ${foundTracks.length} | ❌ ${notFound} not found`, 'info');
                         }
                     }
                 };
 
                 for (let i = 0; i < concurrency; i++) {
-                    activeWorkers.push(worker());
+                    searchWorkers.push(searchWorker());
                 }
-
-                await Promise.all(activeWorkers);
+                await Promise.all(searchWorkers);
 
                 if (this.stopConversion) {
-                    this.log('Conversion stopped by user.', 'warn');
+                    // Skip phase 2 if stopped
                 } else {
-                    this.log(`Done! Imported ${successes}/${total} tracks`, 'success');
+                    // ── PHASE 2: Add to playlist ONE BY ONE (reliable) ──
+                    this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
+                    this.log(`📋 Phase 2: Adding ${foundTracks.length} tracks to playlist...`, 'info');
+
+                    for (let i = 0; i < foundTracks.length; i++) {
+                        if (this.stopConversion) break;
+
+                        const { trackId, wasInLibrary, truncatedTitle } = foundTracks[i];
+
+                        try {
+                            await new Promise(r => setTimeout(r, 50)); // Small delay to prevent UI freezing
+                            await this.api.library.addTrackToPlaylist(audionPlaylistId, trackId);
+
+                            if (wasInLibrary) {
+                                fromLibrary++;
+                            } else {
+                                successes++;
+                            }
+                        } catch (err) {
+                            console.error('Playlist add failed:', err);
+                            notFound++;
+                            this.log(`❌ Failed to add: ${truncatedTitle}`, 'error');
+                        }
+
+                        // Progress for phase 2 = 50-100%
+                        const progress = 50 + ((i + 1) / foundTracks.length) * 50;
+                        this.updateProgress(progress);
+
+                        if ((i + 1) % 10 === 0 || i === foundTracks.length - 1) {
+                            this.log(`📋 Playlist: ${i + 1}/${foundTracks.length} added`, 'info');
+                        }
+                    }
+                }
+
+                if (this.stopConversion) {
+                    this.log('⚠️ Conversion stopped by user.', 'warn');
+                    this.log(`📊 Final Stats: ${processed}/${total} processed | ✅ ${successes} new | 📚 ${fromLibrary} from library | ❌ ${notFound} not found`, 'info');
+                } else {
+                    this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
+                    this.log(`🎉 CONVERSION COMPLETE!`, 'success');
+                    this.log(`📊 Summary:`, 'info');
+                    this.log(`   Total Tracks: ${total}`, 'info');
+                    this.log(`   ✅ Newly Added: ${successes}`, 'success');
+                    this.log(`   📚 From Library: ${fromLibrary}`, 'warn');
+                    this.log(`   ❌ Not Found: ${notFound}`, 'error');
+                    this.log(`   📝 Playlist: ${playlistData.title}`, 'info');
+                    this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
                     if (this.api.library.refresh) this.api.library.refresh();
                 }
 
@@ -633,25 +812,37 @@
 
         async searchTidal(sourceTrack) {
             try {
+                // 1. Try ISRC search first (Highly accurate)
+                if (sourceTrack.isrc) {
+                    // Try fetch via ISRC if API supported it, but we can stick to search for now or use the track endpoint
+                    // const res = await this.api.fetch(...) 
+                }
+
+                // Standard search with randomized endpoint
                 const query = `${sourceTrack.title} ${sourceTrack.artist}`;
-                const response = await this.api.fetch(`${this.TIDAL_API_BASE}/search/?s=${encodeURIComponent(query)}`);
+                const endpoint = this.getRandomSearchEndpoint();
+                const response = await this.api.fetch(`${endpoint}/search/?s=${encodeURIComponent(query)}`);
 
                 if (!response.ok) return null;
                 const data = await response.json();
 
                 if (data.data && data.data.items && data.data.items.length > 0) {
+                    // Filter Logic:
+                    // 1. If we have duration, check if it's within tolerance (e.g. +/- 10s)
                     const matches = data.data.items;
 
                     if (sourceTrack.duration_ms) {
                         const sourceSec = sourceTrack.duration_ms / 1000;
                         const validDuration = matches.find(m => {
                             const diff = Math.abs(m.duration - sourceSec);
-                            return diff < 10; 
+                            return diff < 10; // 10 seconds tolerance
                         });
 
+                        // If we found a duration match, return it
                         if (validDuration) return validDuration;
                     }
 
+                    // Fallback to first result if no duration match (or no duration info)
                     return matches[0];
                 }
             } catch (e) {
@@ -663,6 +854,8 @@
         async addTrackToLibrary(tidalTrack) {
             const artistName = tidalTrack.artist?.name || tidalTrack.artists?.[0]?.name || 'Unknown Artist';
             const title = tidalTrack.title + (tidalTrack.version ? ` (${tidalTrack.version})` : '');
+
+            // High res cover if available
             const coverUrl = tidalTrack.album?.cover
                 ? `https://resources.tidal.com/images/${tidalTrack.album.cover.replace(/-/g, '/')}/1280x1280.jpg`
                 : null;
@@ -690,4 +883,3 @@
         window.AudionPlugin = SpotifyConverter;
     }
 })();
-
