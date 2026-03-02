@@ -169,7 +169,9 @@
                 source_type: 'tidal',
                 external_id: String(tidalTrack.id),
                 format: 'LOSSLESS',
-                bitrate: null
+                bitrate: null,
+                track_number: tidalTrack.trackNumber || null,
+                disc_number: tidalTrack.volumeNumber || null
             };
             return await this.api.library.addExternalTrack(trackData);
         },
@@ -1137,4 +1139,5 @@
         window.SpotifyConverter = SpotifyConverter;
         window.AudionPlugin = SpotifyConverter;
     }
+
 })();
