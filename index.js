@@ -862,12 +862,20 @@
 
         parseDurationToMs(timeStr) {
             if (!timeStr) return 0;
+            if (typeof timeStr === 'number') {
+                return timeStr > 3600 ? timeStr : timeStr * 1000;
+            }
             try {
-                const parts = timeStr.split(':');
-                if (parts.length === 2) {
-                    const min = parseInt(parts[0], 10);
-                    const sec = parseInt(parts[1], 10);
-                    return (min * 60 + sec) * 1000;
+                const parts = String(timeStr)
+                    .split(':')
+                    .map((p) => parseInt(p, 10));
+                if (parts.some(isNaN)) return 0;
+                if (parts.length === 3) {
+                    return (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+                } else if (parts.length === 2) {
+                    return (parts[0] * 60 + parts[1]) * 1000;
+                } else if (parts.length === 1) {
+                    return parts[0] * 1000;
                 }
             } catch (e) { }
             return 0;
@@ -922,8 +930,15 @@
                     tracks: allTracks
                 });
 
-                // Check if there are more pages
-                if (!data.next || pageTracks.length === 0 || allTracks.length >= total) {
+                // Warn if we exit the loop with fewer tracks than expected
+                if (
+                    !data.next ||
+                    pageTracks.length === 0 ||
+                    allTracks.length >= total
+                ) {
+                    if (allTracks.length < total) {
+                        this.log(`Only fetched ${allTracks.length} of ${total} tracks — API may have stopped paginating early`, 'warn');
+                    }
                     break;
                 }
 
@@ -1011,55 +1026,123 @@
                 let successes = 0;
                 let fromLibrary = 0;
                 let notFound = 0;
-                const foundTracks = [];
+
+                // Use an index-aware structure to preserve original playlist order.
+                const foundTracks = new Array(total).fill(null);
+
+                // lock to prevent duplicate concurrent searches
+                const inFlight = new Map();
 
                 // Phase 1: Search (concurrency = 3)
                 const concurrency = 3;
-                const queue = [...playlistData.tracks];
+                // Queue items carry their original index so results land in the right slot
+                const queue = playlistData.tracks.map((track, idx) => ({ track, idx }));
                 const searchWorkers = [];
+                let skipped = 0;
 
                 const searchWorker = async () => {
                     while (queue.length > 0 && !this.stopConversion) {
-                        const track = queue.shift();
+                        const item = queue.shift();
+                        if (!item) break;
+                        const { track, idx } = item;
                         const key = `${this.normalizeString(track.title)}|${this.normalizeString(track.artist)}|${track.duration_ms}`;
-                        const cachedId = this.trackCache.get(key);
 
+                        let trackId = null;
+                        let wasInLibrary = false;
+
+                        const cachedId = this.trackCache.get(key);
                         if (cachedId) {
-                            foundTracks.push({ track, trackId: cachedId, wasInLibrary: true, truncatedTitle: track.title });
+                            trackId = cachedId;
+                            wasInLibrary = true;
                             fromLibrary++;
-                        } else {
+                        } else if (inFlight.has(key)) {
                             try {
-                                // Jitter to avoid rate limits
-                                await new Promise(r => setTimeout(r, 100 + Math.random() * 100));
-                                const tidalTrack = await this.searchTidal(track, this.abortController.signal);
-                                if (tidalTrack) {
-                                    const tidalId = String(tidalTrack.id);
-                                    let trackId;
-                                    let wasInLibrary = existingTracks.has(tidalId);
-                                    if (wasInLibrary) {
-                                        trackId = existingTracks.get(tidalId);
-                                        fromLibrary++;
-                                    } else {
-                                        trackId = await this.addTrackToLibrary(tidalTrack);
-                                        existingTracks.set(tidalId, trackId);
+                                const result = await inFlight.get(key);
+                                if (result) {
+                                    trackId = result.id;
+                                    wasInLibrary = !result.isNew;
+                                    if (result.isNew) {
                                         successes++;
+                                    } else {
+                                        fromLibrary++;
                                     }
-                                    foundTracks.push({ track, trackId, wasInLibrary, truncatedTitle: track.title });
-                                    this.trackCache.set(key, trackId);
                                 } else {
                                     notFound++;
-                                    foundTracks.push({ track, trackId: null, wasInLibrary: false, truncatedTitle: track.title });
                                 }
+                                // After
                             } catch (err) {
                                 if (err.name === 'AbortError') {
-                                    this.log('⏹️ Search aborted', 'warn');
+                                    foundTracks[idx] = { track, trackId: null, wasInLibrary: false, truncatedTitle: track.title };
+                                    processed++;  // increment before break so progress bar reflects reality
+                                    const phase1Percent = (processed / total) * 50;
+                                    this.updateProgress(phase1Percent);
                                     break;
                                 }
-                                console.error(err);
                                 notFound++;
-                                foundTracks.push({ track, trackId: null, wasInLibrary: false, truncatedTitle: track.title });
+                            }
+
+                        } else {
+                            const searchPromise = (async () => {
+                                try {
+                                    await new Promise(r => setTimeout(r, 100 + Math.random() * 100));
+                                    const tidalTrack = await this.searchTidal(track, this.abortController.signal);
+                                    if (tidalTrack) {
+                                        const tidalId = String(tidalTrack.id);
+                                        let resolvedId;
+                                        const alreadyInLibrary = existingTracks.has(tidalId);
+                                        if (alreadyInLibrary) {
+                                            resolvedId = existingTracks.get(tidalId);
+                                        } else {
+                                            resolvedId = await this.addTrackToLibrary(tidalTrack);
+                                            existingTracks.set(tidalId, resolvedId);
+                                        }
+                                        this.trackCache.set(key, resolvedId);
+                                        return { id: resolvedId, isNew: !alreadyInLibrary };
+                                    }
+                                    return null;
+                                } catch (err) {
+                                    if (err.name === 'AbortError') throw err;
+                                    console.error(err);
+                                    return null;
+                                }
+                            })();
+
+                            inFlight.set(key, searchPromise);
+                            try {
+                                const result = await searchPromise;
+                                if (result) {
+                                    trackId = result.id;
+                                    wasInLibrary = !result.isNew;
+                                    if (result.isNew) {
+                                        successes++;
+                                    } else {
+                                        fromLibrary++;
+                                    }
+                                } else {
+                                    notFound++;
+                                }
+                                // After
+                            } catch (err) {
+                                if (err.name === 'AbortError') {
+                                    foundTracks[idx] = { track, trackId: null, wasInLibrary: false, truncatedTitle: track.title };
+                                    processed++;
+                                    const phase1Percent = (processed / total) * 50;
+                                    this.updateProgress(phase1Percent);
+                                    break;
+                                }
+                                notFound++;
+                            } finally {
+                                inFlight.delete(key);
                             }
                         }
+
+                        // Place result into the pre-allocated slot by original index
+                        foundTracks[idx] = {
+                            track,
+                            trackId,
+                            wasInLibrary,
+                            truncatedTitle: track.title
+                        };
 
                         processed++;
                         if (processed % 5 === 0 || processed === total) {
@@ -1075,6 +1158,11 @@
                 }
                 await Promise.all(searchWorkers);
 
+                skipped = foundTracks.filter(e => e === null).length;
+                if (skipped > 0) {
+                    this.log(`⏭️ Skipped (stopped early): ${skipped}`, 'warn');
+                }
+
                 if (this.stopConversion) {
                     this.log('⚠️ Conversion stopped by user.', 'warn');
                 } else {
@@ -1084,14 +1172,13 @@
 
                     for (let i = 0; i < foundTracks.length; i++) {
                         if (this.stopConversion) break;
-                        const { trackId, truncatedTitle } = foundTracks[i];
-                        if (trackId) {
-                            try {
-                                await new Promise(r => setTimeout(r, 50)); // throttle
-                                await this.api.library.addTrackToPlaylist(audionPlaylistId, trackId);
-                            } catch (err) {
-                                this.log(`❌ Failed to add: ${truncatedTitle}`, 'error');
-                            }
+                        const entry = foundTracks[i];
+                        if (!entry || !entry.trackId) continue;
+                        try {
+                            await new Promise(r => setTimeout(r, 50)); // throttle
+                            await this.api.library.addTrackToPlaylist(audionPlaylistId, entry.trackId);
+                        } catch (err) {
+                            this.log(`❌ Failed to add: ${entry.truncatedTitle}`, 'error');
                         }
                         const phase2Progress = 50 + ((i + 1) / foundTracks.length) * 50;
                         this.updateProgress(phase2Progress);
@@ -1105,6 +1192,7 @@
                     this.log(`   ✅ Newly Added: ${successes}`, 'success');
                     this.log(`   📚 From Library: ${fromLibrary}`, 'warn');
                     this.log(`   ❌ Not Found: ${notFound}`, 'error');
+                    if (skipped > 0) this.log(`   ⏭️ Skipped (stopped early): ${skipped}`, 'warn');
                     this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
 
                     if (this.api.library.refresh) this.api.library.refresh();
