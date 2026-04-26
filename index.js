@@ -1,6 +1,6 @@
 (function () {
     // ═══════════════════════════════════════════════════════════════════════════
-    // SPOTIFY CONVERTER PLUGIN - ENHANCED VERSION
+    // SPOTIFY CONVERTER PLUGIN - JIOSAAVN VERSION
     // ═══════════════════════════════════════════════════════════════════════════
 
     const SpotifyConverter = {
@@ -14,18 +14,10 @@
         importedPlaylistData: null,
 
         // API endpoints
-        TIDAL_SEARCH_ENDPOINTS: [
-            'https://hund.qqdl.site',
-            'https://katze.qqdl.site',
-            'https://tidal.kinoplus.online',
-            'https://maus.qqdl.site',
-            'https://arran.monochrome.tf'
-        ],
-        TIDAL_DETAILS_ENDPOINT: 'https://triton.squid.wtf', // For ISRC lookup
-        NEW_SPOTIFY_API_BASE: 'https://playlist.audionplayer.com/api/playlist',
+        JIOSAAVN_API_BASE: 'https://jiosaavn-api-privatecvc2.vercel.app',
+        NEW_SPOTIFY_API_BASE: 'https://spotify-api-henna.vercel.app/api/playlist/',
 
-        lastWorkingSearchEndpoint: null,
-        trackCache: new Map(), // normalized key -> Tidal ID
+        trackCache: new Map(), // normalized key -> JioSaavn ID
 
         // ── Lifecycle ───────────────────────────────────────────────────────
         async init(api) {
@@ -38,68 +30,19 @@
         },
 
         // ── API helpers ──────────────────────────────────────────────────────
-        async getWorkingSearchEndpoint() {
-            const endpoints = [...this.TIDAL_SEARCH_ENDPOINTS];
-            if (this.lastWorkingSearchEndpoint) {
-                const idx = endpoints.indexOf(this.lastWorkingSearchEndpoint);
-                if (idx > -1) {
-                    endpoints.splice(idx, 1);
-                    endpoints.unshift(this.lastWorkingSearchEndpoint);
-                }
-            }
-            for (const base of endpoints) {
-                try {
-                    const testUrl = `${base}/search/?s=test`;
-                    const res = await fetch(testUrl, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
-                    if (res.ok) {
-                        this.lastWorkingSearchEndpoint = base;
-                        return base;
-                    }
-                } catch (e) {
-                    // ignore
-                }
-            }
-            return this.TIDAL_SEARCH_ENDPOINTS[0]; // fallback
-        },
-
-        async searchByISRC(isrc, signal) {
-            const url = `${this.TIDAL_DETAILS_ENDPOINT}/track/?isrc=${isrc}`;
-            try {
-                const res = await this.api.fetch(url, { signal });
-                if (res.ok) {
-                    const data = await res.json();
-                    return data.data; // assume track object
-                }
-            } catch (e) {
-                if (e.name === 'AbortError') throw e;
-            }
-            return null;
-        },
-
-        async searchTidal(sourceTrack, signal) {
-            // 1. Try ISRC first if available
-            if (sourceTrack.isrc) {
-                try {
-                    const isrcTrack = await this.searchByISRC(sourceTrack.isrc, signal);
-                    if (isrcTrack) return isrcTrack;
-                } catch (e) {
-                    if (e.name === 'AbortError') throw e;
-                }
-            }
-
-            // 2. Fallback to text search
-            const endpoint = await this.getWorkingSearchEndpoint();
+        async searchJioSaavn(sourceTrack, signal) {
             const query = `${sourceTrack.title} ${sourceTrack.artist}`;
-            const url = `${endpoint}/search/?s=${encodeURIComponent(query)}`;
+            const url = `${this.JIOSAAVN_API_BASE}/search/songs?query=${encodeURIComponent(query)}&limit=10`;
             const res = await this.api.fetch(url, { signal });
             if (!res.ok) return null;
             const data = await res.json();
-            if (!data.data || !data.data.items || data.data.items.length === 0) return null;
+            const items = data?.data?.results || [];
+            if (items.length === 0) return null;
 
             // Score each candidate
-            const candidates = data.data.items.map(tidalTrack => ({
-                track: tidalTrack,
-                score: this.calculateMatchScore(tidalTrack, sourceTrack)
+            const candidates = items.map(saavnTrack => ({
+                track: saavnTrack,
+                score: this.calculateMatchScore(saavnTrack, sourceTrack)
             }));
             candidates.sort((a, b) => b.score - a.score);
             const best = candidates[0];
@@ -111,40 +54,44 @@
             return str.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
         },
 
-        calculateMatchScore(tidalTrack, spotifyTrack) {
+        calculateMatchScore(saavnTrack, spotifyTrack) {
             let score = 0;
 
-            const tidalTitle = this.normalizeString(tidalTrack.title);
+            const saavnTitle = this.normalizeString(saavnTrack.name || saavnTrack.title || '');
             const spotifyTitle = this.normalizeString(spotifyTrack.title);
-            if (tidalTitle === spotifyTitle) score += 50;
-            else if (tidalTitle.includes(spotifyTitle) || spotifyTitle.includes(tidalTitle)) score += 30;
+            if (saavnTitle === spotifyTitle) score += 50;
+            else if (saavnTitle.includes(spotifyTitle) || spotifyTitle.includes(saavnTitle)) score += 30;
 
-            const tidalArtist = this.normalizeString(tidalTrack.artist?.name || tidalTrack.artists?.[0]?.name || '');
+            // JioSaavn: primaryArtists is a comma-separated string, or artists.primary[].name
+            const saavnArtist = this.normalizeString(
+                saavnTrack.primaryArtists ||
+                (saavnTrack.artists?.primary || []).map(a => a.name).join(', ') ||
+                ''
+            );
             const spotifyArtist = this.normalizeString(spotifyTrack.artist);
-            if (tidalArtist === spotifyArtist) score += 30;
-            else if (tidalArtist.includes(spotifyArtist) || spotifyArtist.includes(tidalArtist)) score += 15;
+            if (saavnArtist === spotifyArtist) score += 30;
+            else if (saavnArtist.includes(spotifyArtist) || spotifyArtist.includes(saavnArtist)) score += 15;
 
             if (spotifyTrack.duration_ms) {
-                const tidalSec = tidalTrack.duration;
+                const saavnSec = Number(saavnTrack.duration) || 0;
                 const spotifySec = spotifyTrack.duration_ms / 1000;
-                const diff = Math.abs(tidalSec - spotifySec);
+                const diff = Math.abs(saavnSec - spotifySec);
                 if (diff < 5) score += 20;
                 else if (diff < 10) score += 10;
             }
 
-            if (tidalTrack.isrc && spotifyTrack.isrc && tidalTrack.isrc === spotifyTrack.isrc) score += 100;
             return score;
         },
 
         // ── Library helpers ─────────────────────────────────────────────────
-        async getTidalLibraryMap() {
+        async getSaavnLibraryMap() {
             const map = new Map();
             if (this.api.library.getTracks) {
                 try {
                     const tracks = await this.api.library.getTracks();
                     if (Array.isArray(tracks)) {
                         tracks.forEach(t => {
-                            if (t.source_type === 'tidal' && t.external_id) {
+                            if (t.source_type === 'jiosaavn' && t.external_id) {
                                 map.set(String(t.external_id), t.id);
                             }
                         });
@@ -154,21 +101,28 @@
             return map;
         },
 
-        async addTrackToLibrary(tidalTrack) {
-            const artistName = tidalTrack.artist?.name || tidalTrack.artists?.[0]?.name || 'Unknown Artist';
-            const title = tidalTrack.title + (tidalTrack.version ? ` (${tidalTrack.version})` : '');
-            const coverUrl = tidalTrack.album?.cover
-                ? `https://resources.tidal.com/images/${tidalTrack.album.cover.replace(/-/g, '/')}/1280x1280.jpg`
-                : null;
+        async addTrackToLibrary(saavnTrack) {
+            const artistName = saavnTrack.primaryArtists ||
+                (saavnTrack.artists?.primary || []).map(a => a.name).join(', ') ||
+                'Unknown Artist';
+            const title = saavnTrack.name || saavnTrack.title || 'Unknown';
+            // JioSaavn image: array of {quality, url/link} or flat string
+            let coverUrl = null;
+            if (Array.isArray(saavnTrack.image)) {
+                const img = saavnTrack.image[2] || saavnTrack.image[1] || saavnTrack.image[0];
+                coverUrl = img?.link || img?.url || null;
+            } else if (typeof saavnTrack.image === 'string') {
+                coverUrl = saavnTrack.image.replace(/150x150|50x50/, '500x500').replace(/^http:\/\//, 'https://');
+            }
             const trackData = {
                 title,
                 artist: artistName,
-                album: tidalTrack.album?.title || null,
-                duration: tidalTrack.duration || null,
+                album: saavnTrack.album?.name || saavnTrack.album || null,
+                duration: Number(saavnTrack.duration) || null,
                 cover_url: coverUrl,
-                source_type: 'tidal',
-                external_id: String(tidalTrack.id),
-                format: 'LOSSLESS',
+                source_type: 'jiosaavn',
+                external_id: String(saavnTrack.id),
+                format: '320kbps',
                 bitrate: null
             };
             return await this.api.library.addExternalTrack(trackData);
@@ -655,7 +609,7 @@
                     </div>
 
                     <div class="sc-info-banner">
-                        ⚠️ Playlists must be <strong>public</strong>. Requires <strong>tidal-search</strong> plugin to play.
+                        ⚠️ Playlists must be <strong>public</strong>. Requires <strong>saavan-search</strong> plugin to play.
                         <a class="sc-help-link" id="sc-help-toggle">Need help?</a>
                     </div>
 
@@ -988,8 +942,8 @@
             this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
 
             try {
-                const existingTracks = await this.getTidalLibraryMap();
-                this.log(`📚 Loaded ${existingTracks.size} existing Tidal tracks`, 'info');
+                const existingTracks = await this.getSaavnLibraryMap();
+                this.log(`📚 Loaded ${existingTracks.size} existing JioSaavn tracks`, 'info');
 
                 // Create playlist
                 const audionPlaylistId = await this.api.library.createPlaylist(playlistData.title);
@@ -1029,17 +983,17 @@
                             try {
                                 // Jitter to avoid rate limits
                                 await new Promise(r => setTimeout(r, 100 + Math.random() * 100));
-                                const tidalTrack = await this.searchTidal(track, this.abortController.signal);
+                                const tidalTrack = await this.searchJioSaavn(track, this.abortController.signal);
                                 if (tidalTrack) {
-                                    const tidalId = String(tidalTrack.id);
+                                    const saavnId = String(tidalTrack.id);
                                     let trackId;
-                                    let wasInLibrary = existingTracks.has(tidalId);
+                                    let wasInLibrary = existingTracks.has(saavnId);
                                     if (wasInLibrary) {
-                                        trackId = existingTracks.get(tidalId);
+                                        trackId = existingTracks.get(saavnId);
                                         fromLibrary++;
                                     } else {
                                         trackId = await this.addTrackToLibrary(tidalTrack);
-                                        existingTracks.set(tidalId, trackId);
+                                        existingTracks.set(saavnId, trackId);
                                         successes++;
                                     }
                                     foundTracks.push({ track, trackId, wasInLibrary, truncatedTitle: track.title });
