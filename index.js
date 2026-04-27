@@ -14,18 +14,10 @@
         importedPlaylistData: null,
 
         // API endpoints
-        TIDAL_SEARCH_ENDPOINTS: [
-            'https://hund.qqdl.site',
-            'https://katze.qqdl.site',
-            'https://tidal.kinoplus.online',
-            'https://maus.qqdl.site',
-            'https://arran.monochrome.tf'
-        ],
-        TIDAL_DETAILS_ENDPOINT: 'https://triton.squid.wtf', // For ISRC lookup
         NEW_SPOTIFY_API_BASE: 'https://playlist.audionplayer.com/api/playlist',
 
-        lastWorkingSearchEndpoint: null,
-        trackCache: new Map(), // normalized key -> Tidal ID
+        // cache normalized key => { trackId, sourceId }
+        trackCache: new Map(),
 
         // ── Lifecycle ───────────────────────────────────────────────────────
         async init(api) {
@@ -37,115 +29,82 @@
             console.log('[SpotifyConverter] Ready');
         },
 
-        // ── API helpers ──────────────────────────────────────────────────────
-        async getWorkingSearchEndpoint() {
-            const endpoints = [...this.TIDAL_SEARCH_ENDPOINTS];
-            if (this.lastWorkingSearchEndpoint) {
-                const idx = endpoints.indexOf(this.lastWorkingSearchEndpoint);
-                if (idx > -1) {
-                    endpoints.splice(idx, 1);
-                    endpoints.unshift(this.lastWorkingSearchEndpoint);
+        // search
+        // Query all registered search sources for a single track.
+        // returns array of SearchResults one per source. carrying
+        // status: success,not_found, error
+        searchAllSources(spotifyTrack, signal) {
+            return new Promise((resolve, reject) => {
+                if (signal?.aborted) {
+                    reject(new DOMException('Aborted', 'AbortError'));
+                    return;
                 }
-            }
-            for (const base of endpoints) {
-                try {
-                    const testUrl = `${base}/search/?s=test`;
-                    const res = await fetch(testUrl, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
-                    if (res.ok) {
-                        this.lastWorkingSearchEndpoint = base;
-                        return base;
+
+                const results = [];
+
+                this.api.search.query(
+                    {
+                        title: spotifyTrack.title,
+                        artist: spotifyTrack.artist,
+                        isrc: spotifyTrack.isrc,
+                        duration_ms: spotifyTrack.duration_ms,
+                    },
+                    (result) => {
+                        if (signal?.aborted) {
+                            reject(new DOMException('Aborted', 'AbortError'));
+                            return;
+                        }
+                        results.push(result);
+                    },
+                    () => {
+                        if (signal?.aborted) {
+                            reject(new DOMException('Aborted', 'AbortError'));
+                            return;
+                        }
+                        resolve(results);
                     }
-                } catch (e) {
-                    // ignore
-                }
-            }
-            return this.TIDAL_SEARCH_ENDPOINTS[0]; // fallback
+                );
+            });
         },
 
-        async searchByISRC(isrc, signal) {
-            const url = `${this.TIDAL_DETAILS_ENDPOINT}/track/?isrc=${isrc}`;
-            try {
-                const res = await this.api.fetch(url, { signal });
-                if (res.ok) {
-                    const data = await res.json();
-                    return data.data; // assume track object
-                }
-            } catch (e) {
-                if (e.name === 'AbortError') throw e;
+        // result prioritization
+        // returns the best result, or null if nothing usable was found
+        // TODO: revisit tidal once the mirror situation is resolved
+        pickBestResult(results) {
+            const SOURCE_PRIORITY = ['qobuz', 'jiosaavn'];
+            // tidal intentionally excluded. currently not working.
+
+            const successes = results.filter(r => r.status === 'success');
+            if (successes.length === 0) return null;
+
+            for (const sourceId of SOURCE_PRIORITY) {
+                const fromSource = successes
+                    .filter(r => r.sourceId === sourceId)
+                    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+                if (fromSource.length > 0) return fromSource[0];
             }
+
             return null;
         },
 
-        async searchTidal(sourceTrack, signal) {
-            // 1. Try ISRC first if available
-            if (sourceTrack.isrc) {
-                try {
-                    const isrcTrack = await this.searchByISRC(sourceTrack.isrc, signal);
-                    if (isrcTrack) return isrcTrack;
-                } catch (e) {
-                    if (e.name === 'AbortError') throw e;
-                }
-            }
-
-            // 2. Fallback to text search
-            const endpoint = await this.getWorkingSearchEndpoint();
-            const query = `${sourceTrack.title} ${sourceTrack.artist}`;
-            const url = `${endpoint}/search/?s=${encodeURIComponent(query)}`;
-            const res = await this.api.fetch(url, { signal });
-            if (!res.ok) return null;
-            const data = await res.json();
-            if (!data.data || !data.data.items || data.data.items.length === 0) return null;
-
-            // Score each candidate
-            const candidates = data.data.items.map(tidalTrack => ({
-                track: tidalTrack,
-                score: this.calculateMatchScore(tidalTrack, sourceTrack)
-            }));
-            candidates.sort((a, b) => b.score - a.score);
-            const best = candidates[0];
-            return best.score >= 60 ? best.track : null; // threshold
-        },
-
+        // normalize string for fuzzy cache-key matching
         normalizeString(str) {
             if (!str) return '';
             return str.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
         },
 
-        calculateMatchScore(tidalTrack, spotifyTrack) {
-            let score = 0;
-
-            const tidalTitle = this.normalizeString(tidalTrack.title);
-            const spotifyTitle = this.normalizeString(spotifyTrack.title);
-            if (tidalTitle === spotifyTitle) score += 50;
-            else if (tidalTitle.includes(spotifyTitle) || spotifyTitle.includes(tidalTitle)) score += 30;
-
-            const tidalArtist = this.normalizeString(tidalTrack.artist?.name || tidalTrack.artists?.[0]?.name || '');
-            const spotifyArtist = this.normalizeString(spotifyTrack.artist);
-            if (tidalArtist === spotifyArtist) score += 30;
-            else if (tidalArtist.includes(spotifyArtist) || spotifyArtist.includes(tidalArtist)) score += 15;
-
-            if (spotifyTrack.duration_ms) {
-                const tidalSec = tidalTrack.duration;
-                const spotifySec = spotifyTrack.duration_ms / 1000;
-                const diff = Math.abs(tidalSec - spotifySec);
-                if (diff < 5) score += 20;
-                else if (diff < 10) score += 10;
-            }
-
-            if (tidalTrack.isrc && spotifyTrack.isrc && tidalTrack.isrc === spotifyTrack.isrc) score += 100;
-            return score;
-        },
-
         // ── Library helpers ─────────────────────────────────────────────────
-        async getTidalLibraryMap() {
+
+        // lookup map of already-imported external tracks so we can deduplicate
+        async getLibraryIndex() {
             const map = new Map();
             if (this.api.library.getTracks) {
                 try {
                     const tracks = await this.api.library.getTracks();
                     if (Array.isArray(tracks)) {
                         tracks.forEach(t => {
-                            if (t.source_type === 'tidal' && t.external_id) {
-                                map.set(String(t.external_id), t.id);
+                            if (t.source_type && t.external_id) {
+                                map.set(`${t.source_type}:${t.external_id}`, t.id);
                             }
                         });
                     }
@@ -154,26 +113,23 @@
             return map;
         },
 
-        async addTrackToLibrary(tidalTrack) {
-            const artistName = tidalTrack.artist?.name || tidalTrack.artists?.[0]?.name || 'Unknown Artist';
-            const title = tidalTrack.title + (tidalTrack.version ? ` (${tidalTrack.version})` : '');
-            const coverUrl = tidalTrack.album?.cover
-                ? `https://resources.tidal.com/images/${tidalTrack.album.cover.replace(/-/g, '/')}/1280x1280.jpg`
-                : null;
-            const trackData = {
-                title,
-                artist: artistName,
-                album: tidalTrack.album?.title || null,
-                duration: tidalTrack.duration || null,
-                cover_url: coverUrl,
-                source_type: 'tidal',
-                external_id: String(tidalTrack.id),
-                format: 'LOSSLESS',
-                bitrate: null,
-                track_number: tidalTrack.trackNumber || null,
-                disc_number: tidalTrack.volumeNumber || null
-            };
-            return await this.api.library.addExternalTrack(trackData);
+        // add a matched track (a SearchResult with status success to the library)
+        async addTrackToLibrary(result) {
+            return await this.api.library.addExternalTrack({
+                title: result.title,
+                artist: result.artist,
+                album: result.album || null,
+                duration: result.duration || null,
+                cover_url: result.cover_url || null,
+                source_type: result.source_type,
+                external_id: result.external_id,
+                format: result.format || null,
+                bitrate: result.bitrate || null,
+                track_number: result.track_number || null,
+                disc_number: result.disc_number || null,
+                musicbrainz_recording_id: result.musicbrainz_recording_id || null,
+                metadata_json: result.metadata_json || null,
+            });
         },
 
         // ── UI ──────────────────────────────────────────────────────────────
@@ -1005,8 +961,8 @@
             this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
 
             try {
-                const existingTracks = await this.getTidalLibraryMap();
-                this.log(`📚 Loaded ${existingTracks.size} existing Tidal tracks`, 'info');
+                const existingTracks = await this.getLibraryIndex();
+                this.log(`📚 Loaded ${existingTracks.size} existing external tracks`, 'info');
 
                 // Create playlist
                 const audionPlaylistId = await this.api.library.createPlaylist(playlistData.title);
@@ -1050,9 +1006,9 @@
                         let trackId = null;
                         let wasInLibrary = false;
 
-                        const cachedId = this.trackCache.get(key);
-                        if (cachedId) {
-                            trackId = cachedId;
+                        const cached = this.trackCache.get(key);
+                        if (cached) {
+                            trackId = cached.trackId;
                             wasInLibrary = true;
                             fromLibrary++;
                         } else if (inFlight.has(key)) {
@@ -1085,18 +1041,26 @@
                             const searchPromise = (async () => {
                                 try {
                                     await new Promise(r => setTimeout(r, 100 + Math.random() * 100));
-                                    const tidalTrack = await this.searchTidal(track, this.abortController.signal);
-                                    if (tidalTrack) {
-                                        const tidalId = String(tidalTrack.id);
+
+                                    const allResults = await this.searchAllSources(track, this.abortController.signal);
+
+                                    // log any source errors
+                                    allResults
+                                        .filter(r => r.status === 'error')
+                                        .forEach(r => console.warn(`[SpotifyConverter] Source '${r.sourceId}' error for "${track.title}":`, r.error));
+
+                                    const best = this.pickBestResult(allResults);
+                                    if (best) {
+                                        const libraryKey = `${best.source_type}:${best.external_id}`;
+                                        const alreadyInLibrary = existingTracks.has(libraryKey);
                                         let resolvedId;
-                                        const alreadyInLibrary = existingTracks.has(tidalId);
                                         if (alreadyInLibrary) {
-                                            resolvedId = existingTracks.get(tidalId);
+                                            resolvedId = existingTracks.get(libraryKey);
                                         } else {
-                                            resolvedId = await this.addTrackToLibrary(tidalTrack);
-                                            existingTracks.set(tidalId, resolvedId);
+                                            resolvedId = await this.addTrackToLibrary(best);
+                                            existingTracks.set(libraryKey, resolvedId);
                                         }
-                                        this.trackCache.set(key, resolvedId);
+                                        this.trackCache.set(key, { trackId: resolvedId, sourceId: best.sourceId });
                                         return { id: resolvedId, isNew: !alreadyInLibrary };
                                     }
                                     return null;
