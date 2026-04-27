@@ -1,6 +1,6 @@
 (function () {
     // ═══════════════════════════════════════════════════════════════════════════
-    // SPOTIFY CONVERTER PLUGIN - ENHANCED VERSION
+    // SPOTIFY CONVERTER PLUGIN - REFACTORED VERSION
     // ═══════════════════════════════════════════════════════════════════════════
 
     const SpotifyConverter = {
@@ -613,7 +613,7 @@
                     </div>
 
                     <div class="sc-info-banner">
-                        ⚠️ Playlists must be <strong>public</strong>. Requires <strong>tidal-search</strong> plugin to play.
+                        ⚠️ Playlists must be <strong>public</strong>. Requires <strong>saavan-search/qobuz-player</strong> plugin to play.
                         <a class="sc-help-link" id="sc-help-toggle">Need help?</a>
                     </div>
 
@@ -1025,7 +1025,6 @@
                                 } else {
                                     notFound++;
                                 }
-                                // After
                             } catch (err) {
                                 if (err.name === 'AbortError') {
                                     foundTracks[idx] = { track, trackId: null, wasInLibrary: false, truncatedTitle: track.title };
@@ -1085,7 +1084,6 @@
                                 } else {
                                     notFound++;
                                 }
-                                // After
                             } catch (err) {
                                 if (err.name === 'AbortError') {
                                     foundTracks[idx] = { track, trackId: null, wasInLibrary: false, truncatedTitle: track.title };
