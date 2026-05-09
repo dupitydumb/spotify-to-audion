@@ -1,7 +1,7 @@
 {
   "name": "Spotify Converter",
   "safe_name": null,
-  "version": "2.0.5",
+  "version": "2.0.6",
   "author": "Audion Team",
   "description": "Convert Spotify playlists to Audion playlists using Plugins",
   "repo": "https://github.com/dupitydumb/spotify-to-audion",
@@ -17,7 +17,7 @@
   ],
   "cross_plugin_access": [],
   "ui_slots": null,
-  "icon": null,
+  "icon": "icon.png",
   "category": "utility",
   "tags": [
     "converter",
