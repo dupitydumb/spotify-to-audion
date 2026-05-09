@@ -1,6 +1,6 @@
 (function () {
     // ═══════════════════════════════════════════════════════════════════════════
-    // SPOTIFY CONVERTER PLUGIN - JIOSAAVN VERSION
+    // SPOTIFY CONVERTER PLUGIN - REFACTORED VERSION
     // ═══════════════════════════════════════════════════════════════════════════
 
     const SpotifyConverter = {
@@ -14,10 +14,10 @@
         importedPlaylistData: null,
 
         // API endpoints
-        JIOSAAVN_API_BASE: 'https://jiosaavn-api-privatecvc2.vercel.app',
-        NEW_SPOTIFY_API_BASE: 'https://spotify-api-henna.vercel.app/api/playlist/',
+        NEW_SPOTIFY_API_BASE: 'https://playlist.audionplayer.com/api/playlist',
 
-        trackCache: new Map(), // normalized key -> JioSaavn ID
+        // cache normalized key => { trackId, sourceId }
+        trackCache: new Map(),
 
         // ── Lifecycle ───────────────────────────────────────────────────────
         async init(api) {
@@ -29,70 +29,82 @@
             console.log('[SpotifyConverter] Ready');
         },
 
-        // ── API helpers ──────────────────────────────────────────────────────
-        async searchJioSaavn(sourceTrack, signal) {
-            const query = `${sourceTrack.title} ${sourceTrack.artist}`;
-            const url = `${this.JIOSAAVN_API_BASE}/search/songs?query=${encodeURIComponent(query)}&limit=10`;
-            const res = await this.api.fetch(url, { signal });
-            if (!res.ok) return null;
-            const data = await res.json();
-            const items = data?.data?.results || [];
-            if (items.length === 0) return null;
+        // search
+        // Query all registered search sources for a single track.
+        // returns array of SearchResults one per source. carrying
+        // status: success,not_found, error
+        searchAllSources(spotifyTrack, signal) {
+            return new Promise((resolve, reject) => {
+                if (signal?.aborted) {
+                    reject(new DOMException('Aborted', 'AbortError'));
+                    return;
+                }
 
-            // Score each candidate
-            const candidates = items.map(saavnTrack => ({
-                track: saavnTrack,
-                score: this.calculateMatchScore(saavnTrack, sourceTrack)
-            }));
-            candidates.sort((a, b) => b.score - a.score);
-            const best = candidates[0];
-            return best.score >= 60 ? best.track : null; // threshold
+                const results = [];
+
+                this.api.search.query(
+                    {
+                        title: spotifyTrack.title,
+                        artist: spotifyTrack.artist,
+                        isrc: spotifyTrack.isrc,
+                        duration_ms: spotifyTrack.duration_ms,
+                    },
+                    (result) => {
+                        if (signal?.aborted) {
+                            reject(new DOMException('Aborted', 'AbortError'));
+                            return;
+                        }
+                        results.push(result);
+                    },
+                    () => {
+                        if (signal?.aborted) {
+                            reject(new DOMException('Aborted', 'AbortError'));
+                            return;
+                        }
+                        resolve(results);
+                    }
+                );
+            });
         },
 
+        // result prioritization
+        // returns the best result, or null if nothing usable was found
+        // TODO: revisit tidal once the mirror situation is resolved
+        pickBestResult(results) {
+            const SOURCE_PRIORITY = ['qobuz', 'jiosaavn'];
+            // tidal intentionally excluded. currently not working.
+
+            const successes = results.filter(r => r.status === 'success');
+            if (successes.length === 0) return null;
+
+            for (const sourceId of SOURCE_PRIORITY) {
+                const fromSource = successes
+                    .filter(r => r.sourceId === sourceId)
+                    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+                if (fromSource.length > 0) return fromSource[0];
+            }
+
+            return null;
+        },
+
+        // normalize string for fuzzy cache-key matching
         normalizeString(str) {
             if (!str) return '';
             return str.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
         },
 
-        calculateMatchScore(saavnTrack, spotifyTrack) {
-            let score = 0;
-
-            const saavnTitle = this.normalizeString(saavnTrack.name || saavnTrack.title || '');
-            const spotifyTitle = this.normalizeString(spotifyTrack.title);
-            if (saavnTitle === spotifyTitle) score += 50;
-            else if (saavnTitle.includes(spotifyTitle) || spotifyTitle.includes(saavnTitle)) score += 30;
-
-            // JioSaavn: primaryArtists is a comma-separated string, or artists.primary[].name
-            const saavnArtist = this.normalizeString(
-                saavnTrack.primaryArtists ||
-                (saavnTrack.artists?.primary || []).map(a => a.name).join(', ') ||
-                ''
-            );
-            const spotifyArtist = this.normalizeString(spotifyTrack.artist);
-            if (saavnArtist === spotifyArtist) score += 30;
-            else if (saavnArtist.includes(spotifyArtist) || spotifyArtist.includes(saavnArtist)) score += 15;
-
-            if (spotifyTrack.duration_ms) {
-                const saavnSec = Number(saavnTrack.duration) || 0;
-                const spotifySec = spotifyTrack.duration_ms / 1000;
-                const diff = Math.abs(saavnSec - spotifySec);
-                if (diff < 5) score += 20;
-                else if (diff < 10) score += 10;
-            }
-
-            return score;
-        },
-
         // ── Library helpers ─────────────────────────────────────────────────
-        async getSaavnLibraryMap() {
+
+        // lookup map of already-imported external tracks so we can deduplicate
+        async getLibraryIndex() {
             const map = new Map();
             if (this.api.library.getTracks) {
                 try {
                     const tracks = await this.api.library.getTracks();
                     if (Array.isArray(tracks)) {
                         tracks.forEach(t => {
-                            if (t.source_type === 'jiosaavn' && t.external_id) {
-                                map.set(String(t.external_id), t.id);
+                            if (t.source_type && t.external_id) {
+                                map.set(`${t.source_type}:${t.external_id}`, t.id);
                             }
                         });
                     }
@@ -101,31 +113,23 @@
             return map;
         },
 
-        async addTrackToLibrary(saavnTrack) {
-            const artistName = saavnTrack.primaryArtists ||
-                (saavnTrack.artists?.primary || []).map(a => a.name).join(', ') ||
-                'Unknown Artist';
-            const title = saavnTrack.name || saavnTrack.title || 'Unknown';
-            // JioSaavn image: array of {quality, url/link} or flat string
-            let coverUrl = null;
-            if (Array.isArray(saavnTrack.image)) {
-                const img = saavnTrack.image[2] || saavnTrack.image[1] || saavnTrack.image[0];
-                coverUrl = img?.link || img?.url || null;
-            } else if (typeof saavnTrack.image === 'string') {
-                coverUrl = saavnTrack.image.replace(/150x150|50x50/, '500x500').replace(/^http:\/\//, 'https://');
-            }
-            const trackData = {
-                title,
-                artist: artistName,
-                album: saavnTrack.album?.name || saavnTrack.album || null,
-                duration: Number(saavnTrack.duration) || null,
-                cover_url: coverUrl,
-                source_type: 'jiosaavn',
-                external_id: String(saavnTrack.id),
-                format: '320kbps',
-                bitrate: null
-            };
-            return await this.api.library.addExternalTrack(trackData);
+        // add a matched track (a SearchResult with status success to the library)
+        async addTrackToLibrary(result) {
+            return await this.api.library.addExternalTrack({
+                title: result.title,
+                artist: result.artist,
+                album: result.album || null,
+                duration: result.duration || null,
+                cover_url: result.cover_url || null,
+                source_type: result.source_type,
+                external_id: result.external_id,
+                format: result.format || null,
+                bitrate: result.bitrate || null,
+                track_number: result.track_number || null,
+                disc_number: result.disc_number || null,
+                musicbrainz_recording_id: result.musicbrainz_recording_id || null,
+                metadata_json: result.metadata_json || null,
+            });
         },
 
         // ── UI ──────────────────────────────────────────────────────────────
@@ -609,7 +613,7 @@
                     </div>
 
                     <div class="sc-info-banner">
-                        ⚠️ Playlists must be <strong>public</strong>. Requires <strong>saavan-search</strong> plugin to play.
+                        ⚠️ Playlists must be <strong>public</strong>. Requires <strong>saavan-search/qobuz-player</strong> plugin to play.
                         <a class="sc-help-link" id="sc-help-toggle">Need help?</a>
                     </div>
 
@@ -814,12 +818,20 @@
 
         parseDurationToMs(timeStr) {
             if (!timeStr) return 0;
+            if (typeof timeStr === 'number') {
+                return timeStr > 3600 ? timeStr : timeStr * 1000;
+            }
             try {
-                const parts = timeStr.split(':');
-                if (parts.length === 2) {
-                    const min = parseInt(parts[0], 10);
-                    const sec = parseInt(parts[1], 10);
-                    return (min * 60 + sec) * 1000;
+                const parts = String(timeStr)
+                    .split(':')
+                    .map((p) => parseInt(p, 10));
+                if (parts.some(isNaN)) return 0;
+                if (parts.length === 3) {
+                    return (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+                } else if (parts.length === 2) {
+                    return (parts[0] * 60 + parts[1]) * 1000;
+                } else if (parts.length === 1) {
+                    return parts[0] * 1000;
                 }
             } catch (e) { }
             return 0;
@@ -874,8 +886,15 @@
                     tracks: allTracks
                 });
 
-                // Check if there are more pages
-                if (!data.next || pageTracks.length === 0 || allTracks.length >= total) {
+                // Warn if we exit the loop with fewer tracks than expected
+                if (
+                    !data.next ||
+                    pageTracks.length === 0 ||
+                    allTracks.length >= total
+                ) {
+                    if (allTracks.length < total) {
+                        this.log(`Only fetched ${allTracks.length} of ${total} tracks — API may have stopped paginating early`, 'warn');
+                    }
                     break;
                 }
 
@@ -942,8 +961,8 @@
             this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
 
             try {
-                const existingTracks = await this.getSaavnLibraryMap();
-                this.log(`📚 Loaded ${existingTracks.size} existing JioSaavn tracks`, 'info');
+                const existingTracks = await this.getLibraryIndex();
+                this.log(`📚 Loaded ${existingTracks.size} existing external tracks`, 'info');
 
                 // Create playlist
                 const audionPlaylistId = await this.api.library.createPlaylist(playlistData.title);
@@ -963,55 +982,129 @@
                 let successes = 0;
                 let fromLibrary = 0;
                 let notFound = 0;
-                const foundTracks = [];
+
+                // Use an index-aware structure to preserve original playlist order.
+                const foundTracks = new Array(total).fill(null);
+
+                // lock to prevent duplicate concurrent searches
+                const inFlight = new Map();
 
                 // Phase 1: Search (concurrency = 3)
                 const concurrency = 3;
-                const queue = [...playlistData.tracks];
+                // Queue items carry their original index so results land in the right slot
+                const queue = playlistData.tracks.map((track, idx) => ({ track, idx }));
                 const searchWorkers = [];
+                let skipped = 0;
 
                 const searchWorker = async () => {
                     while (queue.length > 0 && !this.stopConversion) {
-                        const track = queue.shift();
+                        const item = queue.shift();
+                        if (!item) break;
+                        const { track, idx } = item;
                         const key = `${this.normalizeString(track.title)}|${this.normalizeString(track.artist)}|${track.duration_ms}`;
-                        const cachedId = this.trackCache.get(key);
 
-                        if (cachedId) {
-                            foundTracks.push({ track, trackId: cachedId, wasInLibrary: true, truncatedTitle: track.title });
+                        let trackId = null;
+                        let wasInLibrary = false;
+
+                        const cached = this.trackCache.get(key);
+                        if (cached) {
+                            trackId = cached.trackId;
+                            wasInLibrary = true;
                             fromLibrary++;
-                        } else {
+                        } else if (inFlight.has(key)) {
                             try {
-                                // Jitter to avoid rate limits
-                                await new Promise(r => setTimeout(r, 100 + Math.random() * 100));
-                                const tidalTrack = await this.searchJioSaavn(track, this.abortController.signal);
-                                if (tidalTrack) {
-                                    const saavnId = String(tidalTrack.id);
-                                    let trackId;
-                                    let wasInLibrary = existingTracks.has(saavnId);
-                                    if (wasInLibrary) {
-                                        trackId = existingTracks.get(saavnId);
-                                        fromLibrary++;
-                                    } else {
-                                        trackId = await this.addTrackToLibrary(tidalTrack);
-                                        existingTracks.set(saavnId, trackId);
+                                const result = await inFlight.get(key);
+                                if (result) {
+                                    trackId = result.id;
+                                    wasInLibrary = !result.isNew;
+                                    if (result.isNew) {
                                         successes++;
+                                    } else {
+                                        fromLibrary++;
                                     }
-                                    foundTracks.push({ track, trackId, wasInLibrary, truncatedTitle: track.title });
-                                    this.trackCache.set(key, trackId);
                                 } else {
                                     notFound++;
-                                    foundTracks.push({ track, trackId: null, wasInLibrary: false, truncatedTitle: track.title });
                                 }
                             } catch (err) {
                                 if (err.name === 'AbortError') {
-                                    this.log('⏹️ Search aborted', 'warn');
+                                    foundTracks[idx] = { track, trackId: null, wasInLibrary: false, truncatedTitle: track.title };
+                                    processed++;  // increment before break so progress bar reflects reality
+                                    const phase1Percent = (processed / total) * 50;
+                                    this.updateProgress(phase1Percent);
                                     break;
                                 }
-                                console.error(err);
                                 notFound++;
-                                foundTracks.push({ track, trackId: null, wasInLibrary: false, truncatedTitle: track.title });
+                            }
+
+                        } else {
+                            const searchPromise = (async () => {
+                                try {
+                                    await new Promise(r => setTimeout(r, 100 + Math.random() * 100));
+
+                                    const allResults = await this.searchAllSources(track, this.abortController.signal);
+
+                                    // log any source errors
+                                    allResults
+                                        .filter(r => r.status === 'error')
+                                        .forEach(r => console.warn(`[SpotifyConverter] Source '${r.sourceId}' error for "${track.title}":`, r.error));
+
+                                    const best = this.pickBestResult(allResults);
+                                    if (best) {
+                                        const libraryKey = `${best.source_type}:${best.external_id}`;
+                                        const alreadyInLibrary = existingTracks.has(libraryKey);
+                                        let resolvedId;
+                                        if (alreadyInLibrary) {
+                                            resolvedId = existingTracks.get(libraryKey);
+                                        } else {
+                                            resolvedId = await this.addTrackToLibrary(best);
+                                            existingTracks.set(libraryKey, resolvedId);
+                                        }
+                                        this.trackCache.set(key, { trackId: resolvedId, sourceId: best.sourceId });
+                                        return { id: resolvedId, isNew: !alreadyInLibrary };
+                                    }
+                                    return null;
+                                } catch (err) {
+                                    if (err.name === 'AbortError') throw err;
+                                    console.error(err);
+                                    return null;
+                                }
+                            })();
+
+                            inFlight.set(key, searchPromise);
+                            try {
+                                const result = await searchPromise;
+                                if (result) {
+                                    trackId = result.id;
+                                    wasInLibrary = !result.isNew;
+                                    if (result.isNew) {
+                                        successes++;
+                                    } else {
+                                        fromLibrary++;
+                                    }
+                                } else {
+                                    notFound++;
+                                }
+                            } catch (err) {
+                                if (err.name === 'AbortError') {
+                                    foundTracks[idx] = { track, trackId: null, wasInLibrary: false, truncatedTitle: track.title };
+                                    processed++;
+                                    const phase1Percent = (processed / total) * 50;
+                                    this.updateProgress(phase1Percent);
+                                    break;
+                                }
+                                notFound++;
+                            } finally {
+                                inFlight.delete(key);
                             }
                         }
+
+                        // Place result into the pre-allocated slot by original index
+                        foundTracks[idx] = {
+                            track,
+                            trackId,
+                            wasInLibrary,
+                            truncatedTitle: track.title
+                        };
 
                         processed++;
                         if (processed % 5 === 0 || processed === total) {
@@ -1027,6 +1120,11 @@
                 }
                 await Promise.all(searchWorkers);
 
+                skipped = foundTracks.filter(e => e === null).length;
+                if (skipped > 0) {
+                    this.log(`⏭️ Skipped (stopped early): ${skipped}`, 'warn');
+                }
+
                 if (this.stopConversion) {
                     this.log('⚠️ Conversion stopped by user.', 'warn');
                 } else {
@@ -1036,14 +1134,13 @@
 
                     for (let i = 0; i < foundTracks.length; i++) {
                         if (this.stopConversion) break;
-                        const { trackId, truncatedTitle } = foundTracks[i];
-                        if (trackId) {
-                            try {
-                                await new Promise(r => setTimeout(r, 50)); // throttle
-                                await this.api.library.addTrackToPlaylist(audionPlaylistId, trackId);
-                            } catch (err) {
-                                this.log(`❌ Failed to add: ${truncatedTitle}`, 'error');
-                            }
+                        const entry = foundTracks[i];
+                        if (!entry || !entry.trackId) continue;
+                        try {
+                            await new Promise(r => setTimeout(r, 50)); // throttle
+                            await this.api.library.addTrackToPlaylist(audionPlaylistId, entry.trackId);
+                        } catch (err) {
+                            this.log(`❌ Failed to add: ${entry.truncatedTitle}`, 'error');
                         }
                         const phase2Progress = 50 + ((i + 1) / foundTracks.length) * 50;
                         this.updateProgress(phase2Progress);
@@ -1057,6 +1154,7 @@
                     this.log(`   ✅ Newly Added: ${successes}`, 'success');
                     this.log(`   📚 From Library: ${fromLibrary}`, 'warn');
                     this.log(`   ❌ Not Found: ${notFound}`, 'error');
+                    if (skipped > 0) this.log(`   ⏭️ Skipped (stopped early): ${skipped}`, 'warn');
                     this.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
 
                     if (this.api.library.refresh) this.api.library.refresh();
@@ -1091,4 +1189,5 @@
         window.SpotifyConverter = SpotifyConverter;
         window.AudionPlugin = SpotifyConverter;
     }
+
 })();

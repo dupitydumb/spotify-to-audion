@@ -1,8 +1,8 @@
 {
     "name": "Spotify Converter",
-    "version": "2.0.4",
+    "version": "2.0.5",
     "author": "Audion Team",
-    "description": "Convert Spotify playlists to Audion playlists using JioSaavn",
+    "description": "Convert Spotify playlists to Audion playlists using Plugins",
     "type": "js",
     "entry": "index.js",
     "permissions": [
@@ -16,10 +16,7 @@
     "tags": [
         "converter",
         "spotify",
-        "playlist",
-        "tidal",
-        "saavan",
-        "jiosaavn"
+        "playlist"
     ],
     "license": "MIT",
     "repository": "https://github.com/dupitydumb/spotify-converter"
